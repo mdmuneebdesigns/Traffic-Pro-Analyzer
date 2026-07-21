@@ -1,0 +1,26 @@
+# Python / Environment
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+venv/
+env/
+.venv/
+
+# Database / Media
+*.db
+*.sqlite3
+data/*.mp4
+data/*.avi
+output/
+temp_video.mp4
+
+# OS / Editor
+.DS_Store
+.idea/
+.vscode/
+
+# Node (in case of future frontends)
+node_modules/
+dist/

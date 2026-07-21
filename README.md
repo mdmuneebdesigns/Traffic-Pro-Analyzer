@@ -1,11 +1,33 @@
-<div align="center">
+# Smart Traffic ANPR System
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+This project is a real-time Automatic Number Plate Recognition (ANPR) and vehicle counting system.
 
-  <h1>Built with AI Studio</h2>
+## Tech Stack
+- **Python**: Core logic (OpenCV, YOLOv8, DeepSORT, EasyOCR)
+- **FastAPI**: Backend service for persistent data storage (SQLite)
+- **Streamlit**: Professional administrative dashboard matching the Stitch Design system.
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+## Getting Started
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+### 1. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
 
-</div>
+### 2. Run Backend (SQLite + FastAPI)
+The FastAPI backend must be running first to handle detection events.
+```bash
+uvicorn main:app --port 8000
+```
+
+### 3. Run Dashboard (Streamlit)
+```bash
+streamlit run streamlit_app.py
+```
+
+### 4. Sample Video
+If you don't have a video in the `data/` folder, run:
+```bash
+# Example command to download a traffic sample
+curl -L -o data/sample_traffic.mp4 "https://github.com/intel-iot-devkit/sample-videos/raw/master/traffic-cam-0822.mp4"
+```

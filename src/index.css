@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #ff4b4b;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-[#E4E3E0] text-[#141414] font-sans antialiased;
+  }
+}
+
+.data-grid-border {
+  @apply border-[#141414]/10 border;
+}
+
+.glass-card {
+  @apply bg-white/80 backdrop-blur-md border border-[#141414]/10 rounded-xl;
+}

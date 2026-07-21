@@ -1,0 +1,8 @@
+{
+  "name": "Remix: TrafficFlow MD",
+  "description": "Real-time ANPR traffic monitoring and analytics suite with YOLOv8 vehicle detection and smart filtering.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
