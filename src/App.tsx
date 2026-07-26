@@ -193,7 +193,7 @@ const App = () => {
             if (data.fallbackUsed && (!data.detections || data.detections.length === 0)) {
               addToast(
                 "Demo Mode Active",
-                "YOLOv8 engine is initializing in the background. Please try again in a few seconds.",
+                "YOLO11 engine is initializing in the background. Please try again in a few seconds.",
                 "System"
               );
             } else if (data.detections.length === 0) {

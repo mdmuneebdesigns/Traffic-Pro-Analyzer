@@ -146,10 +146,77 @@ def get_live_metrics():
         "flow_status": "No Traffic"
     }
 
+GLOBAL_YOLO_MODEL = None
+GLOBAL_EASYOCR_READER = None
+
+def get_yolo_model():
+    global GLOBAL_YOLO_MODEL
+    if GLOBAL_YOLO_MODEL is None:
+        from ultralytics import YOLO
+        try:
+            print("Loading YOLO11 neural model (yolo11n.pt)...")
+            GLOBAL_YOLO_MODEL = YOLO('yolo11n.pt')
+            print("Successfully loaded YOLO11 model.")
+        except Exception as e:
+            print(f"yolo11n.pt load failed, falling back to yolov8n.pt: {e}")
+            try:
+                GLOBAL_YOLO_MODEL = YOLO('yolov8n.pt')
+            except Exception as e2:
+                print(f"Fallback model load failed: {e2}")
+    return GLOBAL_YOLO_MODEL
+
+def extract_vehicle_color(crop):
+    if crop is None or crop.size == 0:
+        return "Gray"
+    try:
+        h, w = crop.shape[:2]
+        # Crop center region to ignore asphalt/background
+        cy1, cy2 = int(h * 0.2), int(h * 0.8)
+        cx1, cx2 = int(w * 0.2), int(w * 0.8)
+        center_crop = crop[cy1:cy2, cx1:cx2] if (cy2 > cy1 and cx2 > cx1) else crop
+
+        hsv = cv2.cvtColor(center_crop, cv2.COLOR_BGR2HSV)
+        s_vals = hsv[:, :, 1]
+        v_vals = hsv[:, :, 2]
+
+        mean_s = np.mean(s_vals)
+        mean_v = np.mean(v_vals)
+
+        if mean_v < 50:
+            return "Black"
+        elif mean_s < 35:
+            if mean_v > 200:
+                return "White"
+            elif mean_v > 130:
+                return "Silver"
+            else:
+                return "Gray"
+
+        h_vals = hsv[:, :, 0]
+        mean_h = np.median(h_vals)
+        if mean_h < 10 or mean_h > 170:
+            return "Red"
+        elif 10 <= mean_h < 25:
+            return "Orange"
+        elif 25 <= mean_h < 35:
+            return "Yellow"
+        elif 35 <= mean_h < 85:
+            return "Green"
+        elif 85 <= mean_h < 130:
+            return "Blue"
+        elif 130 <= mean_h < 150:
+            return "Purple"
+        elif 150 <= mean_h <= 170:
+            return "Pink"
+        else:
+            return "Silver"
+    except Exception:
+        return "Silver"
+
 @app.route("/api/health", methods=["GET"])
 def health():
     """Health check endpoint."""
-    return jsonify({"status": "healthy", "service": "Traffic Flow AI Flask Backend"})
+    return jsonify({"status": "healthy", "service": "Traffic Flow AI Flask Backend", "yolo_version": "YOLO11"})
 
 @app.route("/api/analyze-feed", methods=["POST"])
 def analyze_feed_endpoint():
@@ -172,9 +239,10 @@ def analyze_feed_endpoint():
             
         h_img, w_img = frame.shape[:2]
         
-        from ultralytics import YOLO
-        # Load standard yolov8n model. Will automatically download 6MB weight file if not present.
-        model = YOLO('yolov8n.pt')
+        model = get_yolo_model()
+        if model is None:
+            return jsonify({"error": "YOLO11 model failed to initialize"}), 500
+
         results = model(frame, verbose=False)
         
         detections = []
@@ -186,22 +254,20 @@ def analyze_feed_endpoint():
             1: "Bicycle"
         }
         
-        reader = None
-        
         for result in results:
             boxes = result.boxes
             for box in boxes:
                 cls_id = int(box.cls[0].item())
                 if cls_id in class_mapping:
                     conf = float(box.conf[0].item())
-                    # Only accept confident detections
+                    # Confident detections filter (>= 25%)
                     if conf < 0.25:
                         continue
                         
                     xyxy = box.xyxy[0].tolist()
                     x1, y1, x2, y2 = xyxy
                     
-                    # Convert to percentage relative coordinates (0-100)
+                    # Relative coordinates (0-100)
                     ymin = max(0, min(100, int((y1 / h_img) * 100)))
                     xmin = max(0, min(100, int((x1 / w_img) * 100)))
                     ymax = max(0, min(100, int((y2 / h_img) * 100)))
@@ -214,76 +280,59 @@ def analyze_feed_endpoint():
                     
                     vehicle_crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
                     
-                    # Compute realistic dominant color in HSV/RGB space
-                    color_detected = "Gray"
-                    if vehicle_crop.size > 0:
-                        try:
-                            avg_bgr = cv2.mean(vehicle_crop)[:3]
-                            b, g, r = avg_bgr
-                            max_val = max(r, g, b)
-                            min_val = min(r, g, b)
-                            diff = max_val - min_val
+                    color_detected = extract_vehicle_color(vehicle_crop)
                             
-                            if max_val < 55:
-                                color_detected = "Black"
-                            elif min_val > 210:
-                                color_detected = "White"
-                            elif diff < 20:
-                                if max_val > 150:
-                                    color_detected = "Silver"
-                                else:
-                                    color_detected = "Gray"
-                            else:
-                                if r > g and r > b:
-                                    color_detected = "Red"
-                                elif g > r and g > b:
-                                    color_detected = "Green"
-                                elif b > r and b > g:
-                                    color_detected = "Blue"
-                                elif r > 140 and g > 140 and b < 100:
-                                    color_detected = "Yellow"
-                                else:
-                                    color_detected = "Gray"
-                        except Exception:
-                            pass
-                            
-                    # Refine vehicle details
+                    # Refine vehicle subtype
                     v_type = class_mapping[cls_id]
                     brand_detected = v_type
                     if v_type == "Car":
-                        aspect_ratio = (crop_y2 - crop_y1) / (crop_x2 - crop_x1 + 1e-5)
-                        if aspect_ratio > 0.72:
-                            brand_detected = "SUV"
+                        crop_h = crop_y2 - crop_y1
+                        crop_w = crop_x2 - crop_x1
+                        aspect_ratio = crop_h / (crop_w + 1e-5)
+                        if aspect_ratio > 0.75:
                             v_type = "SUV"
-                        else:
+                            brand_detected = "SUV"
+                        elif crop_w > crop_h * 1.8:
+                            v_type = "Sedan"
                             brand_detected = "Sedan"
+                        else:
+                            v_type = "Hatchback"
+                            brand_detected = "Hatchback"
                     elif v_type == "Truck":
                         brand_detected = "Heavy Truck"
                     elif v_type == "Bus":
                         brand_detected = "Coach Bus"
+                    elif v_type == "Motorcycle":
+                        brand_detected = "Sports Bike"
                         
-                    # Plate OCR (optional / lazy loading of easyocr)
+                    # Plate OCR with EasyOCR & CLAHE enhancement
                     plate_text = ""
                     if vehicle_crop.size > 0:
                         try:
+                            global GLOBAL_EASYOCR_READER
                             vh, vw = vehicle_crop.shape[:2]
-                            # Bounding box of plate is usually in the bottom 45% of the vehicle
-                            plate_area_y1 = int(vh * 0.55)
+                            plate_area_y1 = int(vh * 0.50)
                             plate_region = vehicle_crop[plate_area_y1:vh, 0:vw]
                             
                             if plate_region.size > 0:
-                                if reader is None:
+                                gray = cv2.cvtColor(plate_region, cv2.COLOR_BGR2GRAY)
+                                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                                enhanced = clahe.apply(gray)
+                                enhanced_resized = cv2.resize(enhanced, (max(vw * 2, 160), max(vh, 60)), interpolation=cv2.INTER_CUBIC)
+
+                                if GLOBAL_EASYOCR_READER is None:
                                     import easyocr
                                     import torch
-                                    reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
-                                ocr_results = reader.readtext(plate_region)
+                                    GLOBAL_EASYOCR_READER = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+                                ocr_results = GLOBAL_EASYOCR_READER.readtext(enhanced_resized)
                                 if ocr_results:
+                                    ocr_results.sort(key=lambda x: x[2], reverse=True)
                                     for ocr_res in ocr_results:
                                         text = ocr_res[1]
                                         conf_score = ocr_res[2]
-                                        if conf_score > 0.35:
+                                        if conf_score > 0.30:
                                             clean_text = "".join(c for c in text if c.isalnum()).upper()
-                                            if len(clean_text) >= 4 and len(clean_text) <= 12:
+                                            if 4 <= len(clean_text) <= 12:
                                                 plate_text = clean_text
                                                 break
                         except Exception as e:
@@ -295,6 +344,7 @@ def analyze_feed_endpoint():
                         "confidence": int(conf * 100) if conf <= 1 else int(conf),
                         "color": color_detected,
                         "brand": brand_detected,
+                        "engine": "YOLO11",
                         "box": {
                             "ymin": ymin,
                             "xmin": xmin,
@@ -303,7 +353,7 @@ def analyze_feed_endpoint():
                         }
                     })
                     
-        return jsonify({"detections": detections, "fallbackUsed": False})
+        return jsonify({"detections": detections, "model": "YOLO11", "fallbackUsed": False})
     except Exception as e:
         print(f"Error in python analyze-feed endpoint: {e}")
         return jsonify({"error": str(e)}), 500

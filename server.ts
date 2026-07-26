@@ -333,10 +333,10 @@ async function startServer() {
 
       const key = process.env.GEMINI_API_KEY;
       if (!key) {
-        console.warn("GEMINI_API_KEY not found in environment. Forwarding to local Python YOLOv8 computer vision engine...");
+        console.warn("GEMINI_API_KEY not found in environment. Forwarding to local Python YOLO11 computer vision engine...");
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+          const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s timeout for YOLO11
           
           const response = await fetch("http://127.0.0.1:5000/api/analyze-feed", {
             method: "POST",
@@ -349,16 +349,16 @@ async function startServer() {
             const data = await response.json();
             return res.json(data);
           } else {
-            console.warn(`Python YOLOv8 API returned error status ${response.status}.`);
+            console.warn(`Python YOLO11 API returned error status ${response.status}.`);
           }
         } catch (pyErr: any) {
-          console.warn("Failed to reach Python YOLOv8 engine, using simulated detections:", pyErr.message || pyErr);
+          console.warn("Failed to reach Python YOLO11 engine:", pyErr.message || pyErr);
         }
         
         return res.json({
           detections: [],
           fallbackUsed: true,
-          error: "YOLOv8 engine is currently starting up. Please try again in a few seconds."
+          error: "YOLO11 engine is currently starting up. Please try again in a few seconds."
         });
       }
 
@@ -367,10 +367,10 @@ async function startServer() {
         const detections = await generateContentWithRetryAndFallback(ai, image, mimeType);
         return res.json({ detections, fallbackUsed: false });
       } catch (geminiError: any) {
-        console.warn("Gemini API call failed, falling back to local Python YOLOv8 engine:", geminiError.message || geminiError);
+        console.warn("Gemini API call failed, falling back to local Python YOLO11 engine:", geminiError.message || geminiError);
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 10000);
+          const timeoutId = setTimeout(() => controller.abort(), 12000);
           
           const response = await fetch("http://127.0.0.1:5000/api/analyze-feed", {
             method: "POST",
@@ -384,13 +384,13 @@ async function startServer() {
             return res.json(data);
           }
         } catch (pyErr: any) {
-          console.warn("Failed to reach Python YOLOv8 engine during Gemini fallback:", pyErr.message || pyErr);
+          console.warn("Failed to reach Python YOLO11 engine during Gemini fallback:", pyErr.message || pyErr);
         }
         
         return res.json({
           detections: [],
           fallbackUsed: true,
-          error: "Detections failed. Python YOLOv8 engine is initializing."
+          error: "Detections failed. Python YOLO11 engine is initializing."
         });
       }
 
