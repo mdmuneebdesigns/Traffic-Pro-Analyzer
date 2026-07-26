@@ -151,6 +151,163 @@ def health():
     """Health check endpoint."""
     return jsonify({"status": "healthy", "service": "Traffic Flow AI Flask Backend"})
 
+@app.route("/api/analyze-feed", methods=["POST"])
+def analyze_feed_endpoint():
+    try:
+        payload = request.get_json() or {}
+        image_b64 = payload.get("image")
+        if not image_b64:
+            return jsonify({"error": "Missing image data"}), 400
+            
+        import base64
+        import numpy as np
+        import cv2
+        
+        # Decode base64 image
+        img_bytes = base64.b64decode(image_b64)
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return jsonify({"error": "Failed to decode image"}), 400
+            
+        h_img, w_img = frame.shape[:2]
+        
+        from ultralytics import YOLO
+        # Load standard yolov8n model. Will automatically download 6MB weight file if not present.
+        model = YOLO('yolov8n.pt')
+        results = model(frame, verbose=False)
+        
+        detections = []
+        class_mapping = {
+            2: "Car",
+            3: "Motorcycle",
+            5: "Bus",
+            7: "Truck",
+            1: "Bicycle"
+        }
+        
+        reader = None
+        
+        for result in results:
+            boxes = result.boxes
+            for box in boxes:
+                cls_id = int(box.cls[0].item())
+                if cls_id in class_mapping:
+                    conf = float(box.conf[0].item())
+                    # Only accept confident detections
+                    if conf < 0.25:
+                        continue
+                        
+                    xyxy = box.xyxy[0].tolist()
+                    x1, y1, x2, y2 = xyxy
+                    
+                    # Convert to percentage relative coordinates (0-100)
+                    ymin = max(0, min(100, int((y1 / h_img) * 100)))
+                    xmin = max(0, min(100, int((x1 / w_img) * 100)))
+                    ymax = max(0, min(100, int((y2 / h_img) * 100)))
+                    xmax = max(0, min(100, int((x2 / w_img) * 100)))
+                    
+                    crop_x1 = max(0, int(x1))
+                    crop_y1 = max(0, int(y1))
+                    crop_x2 = min(w_img, int(x2))
+                    crop_y2 = min(h_img, int(y2))
+                    
+                    vehicle_crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
+                    
+                    # Compute realistic dominant color in HSV/RGB space
+                    color_detected = "Gray"
+                    if vehicle_crop.size > 0:
+                        try:
+                            avg_bgr = cv2.mean(vehicle_crop)[:3]
+                            b, g, r = avg_bgr
+                            max_val = max(r, g, b)
+                            min_val = min(r, g, b)
+                            diff = max_val - min_val
+                            
+                            if max_val < 55:
+                                color_detected = "Black"
+                            elif min_val > 210:
+                                color_detected = "White"
+                            elif diff < 20:
+                                if max_val > 150:
+                                    color_detected = "Silver"
+                                else:
+                                    color_detected = "Gray"
+                            else:
+                                if r > g and r > b:
+                                    color_detected = "Red"
+                                elif g > r and g > b:
+                                    color_detected = "Green"
+                                elif b > r and b > g:
+                                    color_detected = "Blue"
+                                elif r > 140 and g > 140 and b < 100:
+                                    color_detected = "Yellow"
+                                else:
+                                    color_detected = "Gray"
+                        except Exception:
+                            pass
+                            
+                    # Refine vehicle details
+                    v_type = class_mapping[cls_id]
+                    brand_detected = v_type
+                    if v_type == "Car":
+                        aspect_ratio = (crop_y2 - crop_y1) / (crop_x2 - crop_x1 + 1e-5)
+                        if aspect_ratio > 0.72:
+                            brand_detected = "SUV"
+                            v_type = "SUV"
+                        else:
+                            brand_detected = "Sedan"
+                    elif v_type == "Truck":
+                        brand_detected = "Heavy Truck"
+                    elif v_type == "Bus":
+                        brand_detected = "Coach Bus"
+                        
+                    # Plate OCR (optional / lazy loading of easyocr)
+                    plate_text = ""
+                    if vehicle_crop.size > 0:
+                        try:
+                            vh, vw = vehicle_crop.shape[:2]
+                            # Bounding box of plate is usually in the bottom 45% of the vehicle
+                            plate_area_y1 = int(vh * 0.55)
+                            plate_region = vehicle_crop[plate_area_y1:vh, 0:vw]
+                            
+                            if plate_region.size > 0:
+                                if reader is None:
+                                    import easyocr
+                                    import torch
+                                    reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+                                ocr_results = reader.readtext(plate_region)
+                                if ocr_results:
+                                    for ocr_res in ocr_results:
+                                        text = ocr_res[1]
+                                        conf_score = ocr_res[2]
+                                        if conf_score > 0.35:
+                                            clean_text = "".join(c for c in text if c.isalnum()).upper()
+                                            if len(clean_text) >= 4 and len(clean_text) <= 12:
+                                                plate_text = clean_text
+                                                break
+                        except Exception as e:
+                            print(f"Skipping OCR trace: {e}")
+                            
+                    detections.append({
+                        "type": v_type,
+                        "plate": plate_text or "N/A",
+                        "confidence": int(conf * 100) if conf <= 1 else int(conf),
+                        "color": color_detected,
+                        "brand": brand_detected,
+                        "box": {
+                            "ymin": ymin,
+                            "xmin": xmin,
+                            "ymax": ymax,
+                            "xmax": xmax
+                        }
+                    })
+                    
+        return jsonify({"detections": detections, "fallbackUsed": False})
+    except Exception as e:
+        print(f"Error in python analyze-feed endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/stats", methods=["GET"])
 def stats_endpoint():
     """Returns a JSON payload with live_count, avg_speed, plates_detected, active_alerts, and flow_status."""

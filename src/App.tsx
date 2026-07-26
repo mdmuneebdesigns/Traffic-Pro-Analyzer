@@ -190,10 +190,16 @@ const App = () => {
             setLogs(newLogs);
             setDetectedBoxes(data.detections);
             
-            if (data.fallbackUsed) {
+            if (data.fallbackUsed && (!data.detections || data.detections.length === 0)) {
               addToast(
                 "Demo Mode Active",
-                "Using high-fidelity simulated detections. Set GEMINI_API_KEY in Secrets for live AI analysis.",
+                "YOLOv8 engine is initializing in the background. Please try again in a few seconds.",
+                "System"
+              );
+            } else if (data.detections.length === 0) {
+              addToast(
+                "Analysis Complete",
+                "No vehicles detected in this image. Make sure to upload a scene containing vehicles.",
                 "System"
               );
             } else {
@@ -207,55 +213,11 @@ const App = () => {
             throw new Error("Invalid response format from API");
           }
         } catch (err: any) {
-          console.error("Analysis request failed, using client-side visual fallback:", err);
-          
-          // Highly-realistic ANPR fallback detections
-          const fallbackDetections = [
-            {
-              type: "Car",
-              plate: "MH 04 DH 0730",
-              confidence: 96,
-              color: "Silver",
-              brand: "Toyota Fortuner",
-              box: {
-                ymin: 38,
-                xmin: 32,
-                ymax: 74,
-                xmax: 68
-              }
-            },
-            {
-              type: "SUV",
-              plate: "MH 12 AB 1234",
-              confidence: 89,
-              color: "Black",
-              brand: "Mahindra XUV700",
-              box: {
-                ymin: 45,
-                xmin: 70,
-                ymax: 82,
-                xmax: 98
-              }
-            }
-          ];
-
-          const newLogs = fallbackDetections.map((d, index) => ({
-            id: Date.now() + index,
-            type: d.type,
-            plate: d.plate,
-            time: new Date().toLocaleTimeString(),
-            confidence: (d.confidence / 100).toFixed(2),
-            color: d.color,
-            brand: d.brand,
-            box: d.box,
-          }));
-
-          setLogs(newLogs);
-          setDetectedBoxes(fallbackDetections);
-          
+          console.error("Analysis request failed:", err);
+          setDetectedBoxes([]);
           addToast(
-            "Demo Mode Active",
-            "Using high-fidelity simulated detections. Set GEMINI_API_KEY in Secrets for live AI analysis.",
+            "Analysis Unavailable",
+            "The AI/YOLO computer vision engine is still launching. Please wait a moment and try again.",
             "System"
           );
         } finally {

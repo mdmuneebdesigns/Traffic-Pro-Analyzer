@@ -151,12 +151,12 @@ function getGemini(): GoogleGenAI {
 }
 
 async function generateContentWithRetryAndFallback(ai: GoogleGenAI, image: string, mimeType: string) {
-  const modelsToTry = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.0-flash-lite"];
+  const modelsToTry = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.5-pro"];
   let lastError: any = null;
 
   for (const modelName of modelsToTry) {
-    let attempts = 3;
-    let delay = 1000; // ms
+    let attempts = 2; // Try twice per model
+    let delay = 500; // ms
 
     while (attempts > 0) {
       try {
@@ -331,40 +331,34 @@ async function startServer() {
         return res.status(400).json({ error: "Missing image data" });
       }
 
-      // Check if GEMINI_API_KEY is present
       const key = process.env.GEMINI_API_KEY;
       if (!key) {
-        console.warn("GEMINI_API_KEY not found in environment. Using high-fidelity ANPR computer vision fallback.");
+        console.warn("GEMINI_API_KEY not found in environment. Forwarding to local Python YOLOv8 computer vision engine...");
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+          
+          const response = await fetch("http://127.0.0.1:5000/api/analyze-feed", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ image, mimeType }),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          if (response.ok) {
+            const data = await response.json();
+            return res.json(data);
+          } else {
+            console.warn(`Python YOLOv8 API returned error status ${response.status}.`);
+          }
+        } catch (pyErr: any) {
+          console.warn("Failed to reach Python YOLOv8 engine, using simulated detections:", pyErr.message || pyErr);
+        }
+        
         return res.json({
-          detections: [
-            {
-              type: "Car",
-              plate: "MH 04 DH 0730",
-              confidence: 96,
-              color: "Silver",
-              brand: "Toyota Fortuner",
-              box: {
-                ymin: 38,
-                xmin: 32,
-                ymax: 74,
-                xmax: 68
-              }
-            },
-            {
-              type: "SUV",
-              plate: "MH 12 AB 1234",
-              confidence: 89,
-              color: "Black",
-              brand: "Mahindra XUV700",
-              box: {
-                ymin: 45,
-                xmin: 70,
-                ymax: 82,
-                xmax: 98
-              }
-            }
-          ],
-          fallbackUsed: true
+          detections: [],
+          fallbackUsed: true,
+          error: "YOLOv8 engine is currently starting up. Please try again in a few seconds."
         });
       }
 
@@ -373,37 +367,30 @@ async function startServer() {
         const detections = await generateContentWithRetryAndFallback(ai, image, mimeType);
         return res.json({ detections, fallbackUsed: false });
       } catch (geminiError: any) {
-        console.warn("Gemini API call failed, using high-fidelity fallback:", geminiError.message || geminiError);
+        console.warn("Gemini API call failed, falling back to local Python YOLOv8 engine:", geminiError.message || geminiError);
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000);
+          
+          const response = await fetch("http://127.0.0.1:5000/api/analyze-feed", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ image, mimeType }),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          if (response.ok) {
+            const data = await response.json();
+            return res.json(data);
+          }
+        } catch (pyErr: any) {
+          console.warn("Failed to reach Python YOLOv8 engine during Gemini fallback:", pyErr.message || pyErr);
+        }
+        
         return res.json({
-          detections: [
-            {
-              type: "Car",
-              plate: "MH 04 DH 0730",
-              confidence: 96,
-              color: "Silver",
-              brand: "Toyota Fortuner",
-              box: {
-                ymin: 38,
-                xmin: 32,
-                ymax: 74,
-                xmax: 68
-              }
-            },
-            {
-              type: "SUV",
-              plate: "MH 12 AB 1234",
-              confidence: 89,
-              color: "Black",
-              brand: "Mahindra XUV700",
-              box: {
-                ymin: 45,
-                xmin: 70,
-                ymax: 82,
-                xmax: 98
-              }
-            }
-          ],
-          fallbackUsed: true
+          detections: [],
+          fallbackUsed: true,
+          error: "Detections failed. Python YOLOv8 engine is initializing."
         });
       }
 
