@@ -78,24 +78,29 @@ def verify_and_ocr_plate(
         return "Unknown"
         
     # -------------------------------------------------------------------------
-    # OCR Engine Execution (using EasyOCR or equivalent)
+    # OCR Engine Execution with OpenCV Bilateral Filter & CLAHE Enhancement
     # -------------------------------------------------------------------------
     try:
-        # We can also apply minor preprocessing to improve OCR quality on edge cases
-        # (e.g., resizing smaller crops up for better character definition)
-        if height < 40:
-            resized_plate = cv2.resize(gray_plate, (width * 2, height * 2), interpolation=cv2.INTER_CUBIC)
-            ocr_results = reader.readtext(resized_plate)
-        else:
-            ocr_results = reader.readtext(plate_crop)
+        # Preprocessing: Bilateral Filter (noise reduction while keeping sharp edges) + CLAHE
+        filtered = cv2.bilateralFilter(gray_plate, d=7, sigmaColor=50, sigmaSpace=50)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(filtered)
+        
+        target_w = max(width * 2, 180)
+        target_h = max(height * 2, 60)
+        resized_plate = cv2.resize(enhanced, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+        
+        # Call EasyOCR using strict allowlist to block random special characters!
+        ocr_results = reader.readtext(
+            resized_plate,
+            allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-'
+        )
             
         if not ocr_results:
             logger.info("OCR returned no text detections.")
             return "Unknown"
             
         # Extract detected text and confidence score
-        # Readtext returns a list of tuples: (bbox, text, confidence)
-        # Select the text result with highest confidence
         best_ocr = max(ocr_results, key=lambda x: x[2])
         detected_text = best_ocr[1]
         ocr_confidence = best_ocr[2]

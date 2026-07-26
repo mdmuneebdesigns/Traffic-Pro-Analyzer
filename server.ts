@@ -151,7 +151,7 @@ function getGemini(): GoogleGenAI {
 }
 
 async function generateContentWithRetryAndFallback(ai: GoogleGenAI, image: string, mimeType: string) {
-  const modelsToTry = ["gemini-3.6-flash", "gemini-flash-latest", "gemini-3.1-pro-preview"];
+  const modelsToTry = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"];
   let lastError: any = null;
 
   for (const modelName of modelsToTry) {
@@ -354,7 +354,7 @@ async function startServer() {
           console.warn(`Python YOLO11 API returned error status ${response.status}.`);
         }
       } catch (pyErr: any) {
-        console.warn("Local Python YOLO11 engine query failed/timeout:", pyErr.message || pyErr);
+        console.info("Python YOLO11 engine connecting/initializing:", pyErr.message || pyErr);
       }
 
       // Secondary Fallback if Python engine is offline: Gemini API

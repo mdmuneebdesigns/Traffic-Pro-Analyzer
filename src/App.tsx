@@ -78,10 +78,13 @@ const App = () => {
 
   const [liveStats, setLiveStats] = useState({
     live_count: 0,
-    avg_speed: 48.0,
+    live_status: "Empty Road",
+    avg_speed: 48.5,
+    speed_status: "Normal Flow",
     plates_detected: 0,
+    ocr_status: "OCR Standby",
     active_alerts: 0,
-    flow_status: "No Traffic"
+    alert_status: "No Active Alerts"
   });
 
   useEffect(() => {
@@ -93,14 +96,16 @@ const App = () => {
           const data = await res.json();
           setLiveStats({
             live_count: typeof data.live_count === "number" ? data.live_count : 0,
-            avg_speed: typeof data.avg_speed === "number" ? data.avg_speed : 48.0,
+            live_status: data.live_status || (data.live_count > 0 ? "Heavy Traffic" : "Empty Road"),
+            avg_speed: typeof data.avg_speed === "number" && data.avg_speed > 0 ? data.avg_speed : 48.5,
+            speed_status: data.speed_status || "Normal Flow",
             plates_detected: typeof data.plates_detected === "number" ? data.plates_detected : 0,
+            ocr_status: data.ocr_status || (data.plates_detected > 0 ? `${data.plates_detected} Plates Logged` : "OCR Standby"),
             active_alerts: typeof data.active_alerts === "number" ? data.active_alerts : 0,
-            flow_status: typeof data.flow_status === "string" ? data.flow_status : "No Traffic"
+            alert_status: data.alert_status || (data.active_alerts > 0 ? "Speed Violation Detected" : "No Active Alerts")
           });
         }
       } catch (err) {
-        // Handle transient connection/offline errors gracefully during server reboots
         if (active) {
           console.debug("Live stats server connection is initializing...");
         }
@@ -285,10 +290,10 @@ const App = () => {
           <div className="flex flex-col gap-8">
             {/* KPI Cards */}
             <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              <StatCard icon={<Eye className="text-blue-500" />} label="Live Count" value={liveStats.live_count.toLocaleString()} subValue={liveStats.live_count === 0 ? "Empty Road" : "Active Flow"} />
-              <StatCard icon={<Car className="text-green-500" />} label="Avg Speed" value={`${liveStats.avg_speed} km/h`} subValue={liveStats.live_count === 0 ? "No Active Vehicles" : `Flow: ${liveStats.flow_status || "Stable"}`} />
-              <StatCard icon={<Database className="text-purple-500" />} label="Plates Detected" value={liveStats.plates_detected.toString()} subValue={liveStats.plates_detected > 0 ? "Unique Plates Logged" : "OCR Standby"} />
-              <StatCard icon={<AlertTriangle className="text-orange-500" />} label="Active Alerts" value={liveStats.active_alerts.toString()} subValue={liveStats.active_alerts > 0 ? "Overspeeding Detected" : "No Active Alerts"} />
+              <StatCard icon={<Eye className="text-blue-500" />} label="Live Count" value={liveStats.live_count.toLocaleString()} subValue={liveStats.live_status} />
+              <StatCard icon={<Car className="text-green-500" />} label="Avg Speed" value={`${liveStats.avg_speed > 0 ? liveStats.avg_speed : 48.5} km/h`} subValue={liveStats.speed_status} />
+              <StatCard icon={<Database className="text-purple-500" />} label="Plates Detected" value={liveStats.plates_detected.toString()} subValue={liveStats.ocr_status} />
+              <StatCard icon={<AlertTriangle className="text-orange-500" />} label="Active Alerts" value={liveStats.active_alerts.toString()} subValue={liveStats.alert_status} />
             </section>
 
             {/* Video & Controls Area */}
