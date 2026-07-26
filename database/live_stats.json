@@ -1,0 +1,11 @@
+{
+  "source_type": "video",
+  "live_count": 0,
+  "live_status": "Empty Road",
+  "avg_speed": 0.0,
+  "speed_status": "No Active Vehicles",
+  "plates_detected": 0,
+  "ocr_status": "OCR Standby",
+  "active_alerts": 0,
+  "alert_status": "No Active Alerts"
+}

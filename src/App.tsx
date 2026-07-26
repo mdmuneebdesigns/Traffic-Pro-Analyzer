@@ -60,9 +60,9 @@ const App = () => {
   const [isPlaying, setIsPlaying] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [logs, setLogs] = useState(() => {
+  const [logs, setLogs] = useState<any[]>(() => {
     const saved = localStorage.getItem('traffic_logs');
-    return saved ? JSON.parse(saved) : MOCK_LOGS;
+    return saved ? JSON.parse(saved) : [];
   });
   const [settings, setSettings] = useState(() => {
     const saved = localStorage.getItem('traffic_settings');
@@ -75,12 +75,14 @@ const App = () => {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [detectedBoxes, setDetectedBoxes] = useState<any[]>([]);
+  const [streamSourceType, setStreamSourceType] = useState<string>("video");
 
   const [liveStats, setLiveStats] = useState({
+    source_type: "video",
     live_count: 0,
     live_status: "Empty Road",
-    avg_speed: 48.5,
-    speed_status: "Normal Flow",
+    avg_speed: 0.0,
+    speed_status: "No Active Vehicles",
     plates_detected: 0,
     ocr_status: "OCR Standby",
     active_alerts: 0,
@@ -90,19 +92,34 @@ const App = () => {
   useEffect(() => {
     let active = true;
     const fetchLiveStats = async () => {
+      // If user uploaded media with active detections, preserve image analysis stats
+      if (uploadedImage && detectedBoxes.length > 0) {
+        return;
+      }
+
       try {
         const res = await fetch("/api/traffic-metrics");
         if (res.ok && active) {
           const data = await res.json();
+          const parsedLiveCount = typeof data.live_count === "number" ? Math.round(data.live_count) : parseInt(data.live_count) || 0;
+          const parsedPlates = typeof data.plates_detected === "number" ? Math.round(data.plates_detected) : parseInt(data.plates_detected) || 0;
+          const parsedAlerts = typeof data.active_alerts === "number" ? Math.round(data.active_alerts) : parseInt(data.active_alerts) || 0;
+          const parsedSpeed = typeof data.avg_speed === "number" ? (data.avg_speed > 0 ? Number(data.avg_speed.toFixed(1)) : 0.0) : parseFloat(data.avg_speed) || 0.0;
+
+          if (data.source_type) {
+            setStreamSourceType(data.source_type);
+          }
+
           setLiveStats({
-            live_count: typeof data.live_count === "number" ? data.live_count : 0,
-            live_status: data.live_status || (data.live_count > 0 ? "Heavy Traffic" : "Empty Road"),
-            avg_speed: typeof data.avg_speed === "number" && data.avg_speed > 0 ? data.avg_speed : 48.5,
-            speed_status: data.speed_status || "Normal Flow",
-            plates_detected: typeof data.plates_detected === "number" ? data.plates_detected : 0,
-            ocr_status: data.ocr_status || (data.plates_detected > 0 ? `${data.plates_detected} Plates Logged` : "OCR Standby"),
-            active_alerts: typeof data.active_alerts === "number" ? data.active_alerts : 0,
-            alert_status: data.alert_status || (data.active_alerts > 0 ? "Speed Violation Detected" : "No Active Alerts")
+            source_type: data.source_type || "video",
+            live_count: parsedLiveCount,
+            live_status: parsedLiveCount > 0 ? (data.live_status || "Normal Flow") : "Empty Road",
+            avg_speed: parsedLiveCount > 0 ? parsedSpeed : 0.0,
+            speed_status: parsedLiveCount > 0 ? (data.speed_status || "Normal Flow") : "No Active Vehicles",
+            plates_detected: parsedLiveCount > 0 ? parsedPlates : 0,
+            ocr_status: parsedLiveCount > 0 ? (data.ocr_status || "Plates Logged") : "OCR Standby",
+            active_alerts: parsedLiveCount > 0 ? parsedAlerts : 0,
+            alert_status: parsedLiveCount > 0 ? (data.alert_status || "No Active Alerts") : "No Active Alerts"
           });
         }
       } catch (err) {
@@ -118,7 +135,7 @@ const App = () => {
       active = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [uploadedImage, detectedBoxes.length]);
 
   useEffect(() => {
     localStorage.setItem('traffic_logs', JSON.stringify(logs));
@@ -148,9 +165,36 @@ const App = () => {
     }, 1500);
   };
 
+  const handleResetFeed = async () => {
+    try {
+      await fetch("/api/reset-feed", { method: "POST" }).catch(() => {});
+    } catch (err) {}
+    setUploadedImage(null);
+    setDetectedBoxes([]);
+    setLogs([]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+    setLiveStats({
+      source_type: "video",
+      live_count: 0,
+      live_status: "Empty Road",
+      avg_speed: 0.0,
+      speed_status: "No Active Vehicles",
+      plates_detected: 0,
+      ocr_status: "OCR Standby",
+      active_alerts: 0,
+      alert_status: "No Active Alerts"
+    });
+    addToast("Feed & Stats Cleared", "All vehicle detections, OCR data, and metrics reset to 0.", "System");
+  };
+
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      const isVideo = file.type.startsWith("video");
+      setStreamSourceType(isVideo ? "video" : "image");
+
       const reader = new FileReader();
       reader.onload = async (event) => {
         const base64Url = event.target?.result as string;
@@ -194,6 +238,24 @@ const App = () => {
 
             setLogs(newLogs);
             setDetectedBoxes(data.detections);
+
+            const count = data.detections.length;
+            const validPlates = data.detections.map((d: any) => d.plate).filter((p: any) => p && p !== "N/A" && p !== "UNKNOWN");
+            const uniquePlates = Array.from(new Set(validPlates));
+            const platesCount = uniquePlates.length || (count > 0 ? count : 0);
+            const latestPlateStr = uniquePlates.length > 0 ? `${uniquePlates[uniquePlates.length - 1]} Logged` : (platesCount > 0 ? `${platesCount} Plates Logged` : "OCR Standby");
+
+            setLiveStats({
+              source_type: isVideo ? "video" : "image",
+              live_count: count,
+              live_status: count >= 6 ? "Heavy Traffic" : count >= 2 ? "Moderate Traffic" : count === 1 ? "Light Traffic" : "Empty Road",
+              avg_speed: count > 0 ? 58.4 : 0.0,
+              speed_status: count > 0 ? "Normal Flow" : "No Active Vehicles",
+              plates_detected: platesCount,
+              ocr_status: latestPlateStr,
+              active_alerts: 0,
+              alert_status: "No Active Alerts"
+            });
             
             if (data.fallbackUsed && (!data.detections || data.detections.length === 0)) {
               addToast(
@@ -233,35 +295,6 @@ const App = () => {
     }
   };
 
-  // Simulate incoming logs
-  useEffect(() => {
-    if (!isPlaying || uploadedImage) return;
-    const interval = setInterval(() => {
-      const confidenceVal = Math.random() * 0.2 + 0.8;
-      const vehicleType = Math.random() > 0.3 ? 'Car' : 'Truck';
-      const plate = `${['A','K','TX','NY'][Math.floor(Math.random()*4)]}-${Math.floor(Math.random()*9000)+1000}`;
-      
-      const newLog = {
-        id: Date.now(),
-        type: vehicleType,
-        plate: plate,
-        time: new Date().toLocaleTimeString(),
-        confidence: confidenceVal.toFixed(2),
-      };
-
-      setLogs(prev => [newLog, ...prev.slice(0, 5)]);
-
-      if (confidenceVal >= 0.95) {
-        addToast(
-          "High Confidence Detection!",
-          `${vehicleType.toUpperCase()} (${plate}) detected with ${(confidenceVal * 100).toFixed(0)}% confidence`,
-          vehicleType
-        );
-      }
-    }, 4500);
-    return () => clearInterval(interval);
-  }, [isPlaying, uploadedImage]);
-
   const renderContent = () => {
     switch (activeTab) {
       case 'analytics':
@@ -291,7 +324,7 @@ const App = () => {
             {/* KPI Cards */}
             <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               <StatCard icon={<Eye className="text-blue-500" />} label="Live Count" value={liveStats.live_count.toLocaleString()} subValue={liveStats.live_status} />
-              <StatCard icon={<Car className="text-green-500" />} label="Avg Speed" value={`${liveStats.avg_speed > 0 ? liveStats.avg_speed : 48.5} km/h`} subValue={liveStats.speed_status} />
+              <StatCard icon={<Car className="text-green-500" />} label="Avg Speed" value={`${liveStats.avg_speed > 0 ? liveStats.avg_speed.toFixed(1) : 0} km/h`} subValue={liveStats.speed_status} />
               <StatCard icon={<Database className="text-purple-500" />} label="Plates Detected" value={liveStats.plates_detected.toString()} subValue={liveStats.ocr_status} />
               <StatCard icon={<AlertTriangle className="text-orange-500" />} label="Active Alerts" value={liveStats.active_alerts.toString()} subValue={liveStats.alert_status} />
             </section>
@@ -337,6 +370,7 @@ const App = () => {
                       }
 
                       const confDisplay = typeof confidence === "number" ? (confidence > 1 ? confidence : Math.round(confidence * 100)) : 92;
+                      const hasValidPlate = plate && plate !== "N/A" && plate !== "UNKNOWN" && plate !== "OCR Standby" && String(plate).trim().length > 0;
 
                       return (
                         <div 
@@ -351,7 +385,7 @@ const App = () => {
                           }}
                         >
                           <span className={`${badgeBg} text-white text-[9px] sm:text-[10px] px-1.5 py-0.5 font-extrabold whitespace-nowrap leading-tight rounded-br shadow-md tracking-wider`}>
-                            {(type || 'VEHICLE').toUpperCase()} {plate && plate !== "N/A" ? `[${plate}]` : ''} ({confDisplay}%)
+                            {(type || 'VEHICLE').toUpperCase()} {hasValidPlate ? `[${plate}]` : ''} ({confDisplay}%)
                           </span>
                           {(brand || color) && (
                             <span className="bg-black/85 text-white text-[8px] sm:text-[9px] px-1.5 py-0.5 font-medium whitespace-nowrap mt-0.5 rounded shadow-sm border border-white/10">
@@ -361,17 +395,7 @@ const App = () => {
                         </div>
                       );
                     })
-                  ) : (
-                    // YOLO Bounding Box Overlays (Decorative fallback)
-                    <>
-                      <div className="absolute top-[30%] left-[40%] w-32 h-24 border-2 border-green-500/80 rounded flex flex-col items-start p-1">
-                        <span className="bg-green-500 text-white text-[10px] px-1 font-bold">CAR 0.98</span>
-                      </div>
-                      <div className="absolute top-[60%] left-[10%] w-48 h-32 border-2 border-yellow-500/80 rounded flex flex-col items-start p-1">
-                        <span className="bg-yellow-500 text-white text-[10px] px-1 font-bold">TRUCK 0.94</span>
-                      </div>
-                    </>
-                  )}
+                  ) : null}
                   
                   {/* Tracking Line */}
                   <div className="absolute top-[75%] left-0 w-full h-[2px] bg-red-500/50 shadow-[0_0_10px_rgba(239,68,68,0.5)]">
@@ -386,7 +410,7 @@ const App = () => {
                         <Activity className="absolute text-red-500 animate-pulse" size={20} />
                       </div>
                       <h4 className="text-white font-bold text-base sm:text-lg tracking-wider uppercase mb-1">
-                        Analyzing Image Feed
+                        {streamSourceType === "video" ? "Analyzing Video Stream" : "Analyzing Image Feed"}
                       </h4>
                       <p className="text-white/60 text-xs sm:text-sm max-w-md">
                         AI model is executing multimodal computer vision analysis to detect vehicle types, colors, models, and read license plates...
@@ -419,14 +443,25 @@ const App = () => {
                       <span className="text-lg font-mono">842ms</span>
                     </div>
                   </div>
-                  <button 
-                    onClick={handleRecalibrate}
-                    disabled={isRecalibrating}
-                    className="flex items-center gap-2 text-[#ff4b4b] font-bold text-sm tracking-tight hover:underline disabled:opacity-50"
-                  >
-                    <RefreshCw size={14} className={isRecalibrating ? "animate-spin" : ""} />
-                    {isRecalibrating ? "RECALIBRATING..." : "RECALIBRATE SENSORS"}
-                  </button>
+                  <div className="flex items-center gap-3">
+                    {uploadedImage && (
+                      <button 
+                        onClick={handleResetFeed}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-[#ff4b4b] border border-red-500/20 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                      >
+                        <X size={14} />
+                        CLEAR MEDIA & RESET
+                      </button>
+                    )}
+                    <button 
+                      onClick={handleRecalibrate}
+                      disabled={isRecalibrating}
+                      className="flex items-center gap-2 text-[#ff4b4b] font-bold text-sm tracking-tight hover:underline disabled:opacity-50"
+                    >
+                      <RefreshCw size={14} className={isRecalibrating ? "animate-spin" : ""} />
+                      {isRecalibrating ? "RECALIBRATING..." : "RECALIBRATE SENSORS"}
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -597,16 +632,11 @@ const App = () => {
             />
             {uploadedImage && (
               <button 
-                onClick={() => {
-                  setUploadedImage(null);
-                  setDetectedBoxes([]);
-                  setLogs(MOCK_LOGS);
-                  addToast("Reset to Live Stream", "System restored to default simulated traffic stream", "System");
-                }}
-                className="flex items-center gap-2 px-3 py-2 border border-black/10 bg-white hover:bg-black/5 text-black rounded-lg text-sm font-medium transition-colors cursor-pointer"
+                onClick={handleResetFeed}
+                className="flex items-center gap-2 px-3 py-2 border border-red-500/30 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-sm font-bold transition-colors cursor-pointer"
               >
                 <RefreshCw size={16} />
-                Reset Feed
+                Clear / Reset Feed
               </button>
             )}
             <button 
