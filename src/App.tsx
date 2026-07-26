@@ -695,17 +695,20 @@ const NavItem = ({ icon, label, active = false, onClick }: any) => (
 );
 
 const StatCard = ({ icon, label, value, subValue }: any) => (
-  <div className="glass-card p-6 group hover:translate-y-[-4px] transition-transform duration-300">
-    <div className="flex items-start justify-between mb-4">
-      <div className="w-10 h-10 rounded-xl bg-black/[0.03] flex items-center justify-center">
+  <div className="glass-card p-6 flex flex-col justify-between relative overflow-hidden transition-all duration-300 hover:border-black/20 hover:shadow-xl group">
+    <div className="flex items-center justify-between mb-4">
+      <div className="w-11 h-11 rounded-xl bg-black/[0.04] group-hover:bg-black/5 flex items-center justify-center transition-colors">
         {icon}
       </div>
-      <span className="text-[10px] font-bold text-black/30 bg-black/[0.03] px-2 py-1 rounded-full uppercase tracking-widest leading-none">REAL-TIME</span>
+      <span className="text-[10px] font-extrabold text-emerald-600 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-full uppercase tracking-widest leading-none flex items-center gap-1">
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+        LIVE
+      </span>
     </div>
-    <p className="text-[10px] font-bold uppercase tracking-widest text-black/40 mb-1">{label}</p>
-    <div className="flex items-baseline gap-2">
-      <h4 className="text-2xl font-bold tracking-tighter">{value}</h4>
-      <span className="text-[10px] font-semibold text-black/60">{subValue}</span>
+    <p className="text-[11px] font-bold uppercase tracking-wider text-black/50 mb-1">{label}</p>
+    <div className="flex items-baseline justify-between gap-2">
+      <h4 className="text-3xl font-extrabold tracking-tight text-black">{value}</h4>
+      <span className="text-xs font-semibold text-black/60 bg-black/[0.03] px-2 py-0.5 rounded-md border border-black/5">{subValue}</span>
     </div>
   </div>
 );
