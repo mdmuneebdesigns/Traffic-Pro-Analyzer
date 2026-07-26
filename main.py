@@ -223,12 +223,16 @@ def analyze_feed_endpoint():
     try:
         payload = request.get_json() or {}
         image_b64 = payload.get("image")
+        roboflow_key = payload.get("roboflowApiKey") or os.environ.get("ROBOFLOW_API_KEY")
+        roboflow_model_id = payload.get("roboflowModelId") or os.environ.get("ROBOFLOW_MODEL", "license-plate-recognition-rxg4e/1")
+        
         if not image_b64:
             return jsonify({"error": "Missing image data"}), 400
             
         import base64
         import numpy as np
         import cv2
+        import requests
         
         # Decode base64 image
         img_bytes = base64.b64decode(image_b64)
@@ -238,122 +242,189 @@ def analyze_feed_endpoint():
             return jsonify({"error": "Failed to decode image"}), 400
             
         h_img, w_img = frame.shape[:2]
-        
-        model = get_yolo_model()
-        if model is None:
-            return jsonify({"error": "YOLO11 model failed to initialize"}), 500
-
-        results = model(frame, verbose=False)
+        img_area = h_img * w_img
         
         detections = []
-        class_mapping = {
-            2: "Car",
-            3: "Motorcycle",
-            5: "Bus",
-            7: "Truck",
-            1: "Bicycle"
-        }
-        
-        for result in results:
-            boxes = result.boxes
-            for box in boxes:
-                cls_id = int(box.cls[0].item())
-                if cls_id in class_mapping:
-                    conf = float(box.conf[0].item())
-                    # Confident detections filter (>= 25%)
-                    if conf < 0.25:
-                        continue
-                        
-                    xyxy = box.xyxy[0].tolist()
-                    x1, y1, x2, y2 = xyxy
-                    
-                    # Relative coordinates (0-100)
-                    ymin = max(0, min(100, int((y1 / h_img) * 100)))
-                    xmin = max(0, min(100, int((x1 / w_img) * 100)))
-                    ymax = max(0, min(100, int((y2 / h_img) * 100)))
-                    xmax = max(0, min(100, int((x2 / w_img) * 100)))
-                    
-                    crop_x1 = max(0, int(x1))
-                    crop_y1 = max(0, int(y1))
-                    crop_x2 = min(w_img, int(x2))
-                    crop_y2 = min(h_img, int(y2))
-                    
-                    vehicle_crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
-                    
-                    color_detected = extract_vehicle_color(vehicle_crop)
-                            
-                    # Refine vehicle subtype
-                    v_type = class_mapping[cls_id]
-                    brand_detected = v_type
-                    if v_type == "Car":
-                        crop_h = crop_y2 - crop_y1
-                        crop_w = crop_x2 - crop_x1
-                        aspect_ratio = crop_h / (crop_w + 1e-5)
-                        if aspect_ratio > 0.75:
-                            v_type = "SUV"
-                            brand_detected = "SUV"
-                        elif crop_w > crop_h * 1.8:
-                            v_type = "Sedan"
-                            brand_detected = "Sedan"
-                        else:
-                            v_type = "Hatchback"
-                            brand_detected = "Hatchback"
-                    elif v_type == "Truck":
-                        brand_detected = "Heavy Truck"
-                    elif v_type == "Bus":
-                        brand_detected = "Coach Bus"
-                    elif v_type == "Motorcycle":
-                        brand_detected = "Sports Bike"
-                        
-                    # Plate OCR with EasyOCR & CLAHE enhancement
-                    plate_text = ""
-                    if vehicle_crop.size > 0:
-                        try:
-                            global GLOBAL_EASYOCR_READER
-                            vh, vw = vehicle_crop.shape[:2]
-                            plate_area_y1 = int(vh * 0.50)
-                            plate_region = vehicle_crop[plate_area_y1:vh, 0:vw]
-                            
-                            if plate_region.size > 0:
-                                gray = cv2.cvtColor(plate_region, cv2.COLOR_BGR2GRAY)
-                                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                                enhanced = clahe.apply(gray)
-                                enhanced_resized = cv2.resize(enhanced, (max(vw * 2, 160), max(vh, 60)), interpolation=cv2.INTER_CUBIC)
 
-                                if GLOBAL_EASYOCR_READER is None:
-                                    import easyocr
-                                    import torch
-                                    GLOBAL_EASYOCR_READER = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
-                                ocr_results = GLOBAL_EASYOCR_READER.readtext(enhanced_resized)
-                                if ocr_results:
-                                    ocr_results.sort(key=lambda x: x[2], reverse=True)
-                                    for ocr_res in ocr_results:
-                                        text = ocr_res[1]
-                                        conf_score = ocr_res[2]
-                                        if conf_score > 0.30:
-                                            clean_text = "".join(c for c in text if c.isalnum()).upper()
-                                            if 4 <= len(clean_text) <= 12:
-                                                plate_text = clean_text
-                                                break
-                        except Exception as e:
-                            print(f"Skipping OCR trace: {e}")
+        # --- OPTIONAL ROBOFLOW API INTEGRATION ---
+        if roboflow_key:
+            try:
+                print(f"Querying Roboflow Inference API model {roboflow_model_id}...")
+                rf_url = f"https://detect.roboflow.com/{roboflow_model_id}?api_key={roboflow_key}"
+                rf_resp = requests.post(rf_url, data=image_b64, headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=8)
+                if rf_resp.status_code == 200:
+                    rf_data = rf_resp.json()
+                    predictions = rf_data.get("predictions", [])
+                    for pred in predictions:
+                        cx, cy, w, h = pred["x"], pred["y"], pred["width"], pred["height"]
+                        conf = float(pred.get("confidence", 0.9))
+                        class_name = pred.get("class", "Vehicle").capitalize()
+                        
+                        x1 = max(0, cx - w / 2)
+                        y1 = max(0, cy - h / 2)
+                        x2 = min(w_img, cx + w / 2)
+                        y2 = min(h_img, cy + h / 2)
+                        
+                        ymin = max(0, min(100, int((y1 / h_img) * 100)))
+                        xmin = max(0, min(100, int((x1 / w_img) * 100)))
+                        ymax = max(0, min(100, int((y2 / h_img) * 100)))
+                        xmax = max(0, min(100, int((x2 / w_img) * 100)))
+                        
+                        crop = frame[int(y1):int(y2), int(x1):int(x2)]
+                        color_det = extract_vehicle_color(crop)
+                        
+                        detections.append({
+                            "type": class_name,
+                            "plate": "N/A",
+                            "confidence": int(conf * 100),
+                            "color": color_det,
+                            "brand": f"Roboflow ({class_name})",
+                            "engine": "Roboflow API",
+                            "box": {"ymin": ymin, "xmin": xmin, "ymax": ymax, "xmax": xmax}
+                        })
+            except Exception as rf_err:
+                print(f"Roboflow API query exception: {rf_err}")
+
+        # --- LOCAL YOLO11 NEURAL ENGINE ---
+        if len(detections) == 0:
+            model = get_yolo_model()
+            if model is None:
+                return jsonify({"error": "YOLO11 model failed to initialize"}), 500
+
+            results = model(frame, verbose=False)
+            
+            class_mapping = {
+                2: "Car",
+                3: "Motorcycle",
+                5: "Bus",
+                7: "Truck",
+                1: "Bicycle"
+            }
+            
+            for result in results:
+                boxes = result.boxes
+                for box in boxes:
+                    cls_id = int(box.cls[0].item())
+                    if cls_id in class_mapping:
+                        conf = float(box.conf[0].item())
+                        if conf < 0.12:
+                            continue
                             
-                    detections.append({
-                        "type": v_type,
-                        "plate": plate_text or "N/A",
-                        "confidence": int(conf * 100) if conf <= 1 else int(conf),
-                        "color": color_detected,
-                        "brand": brand_detected,
-                        "engine": "YOLO11",
-                        "box": {
-                            "ymin": ymin,
-                            "xmin": xmin,
-                            "ymax": ymax,
-                            "xmax": xmax
-                        }
-                    })
+                        xyxy = box.xyxy[0].tolist()
+                        x1, y1, x2, y2 = xyxy
+                        
+                        ymin = round(max(0.0, min(100.0, (y1 / h_img) * 100.0)), 2)
+                        xmin = round(max(0.0, min(100.0, (x1 / w_img) * 100.0)), 2)
+                        ymax = round(max(0.0, min(100.0, (y2 / h_img) * 100.0)), 2)
+                        xmax = round(max(0.0, min(100.0, (x2 / w_img) * 100.0)), 2)
+                        
+                        crop_x1 = max(0, int(x1))
+                        crop_y1 = max(0, int(y1))
+                        crop_x2 = min(w_img, int(x2))
+                        crop_y2 = min(h_img, int(y2))
+                        
+                        crop_w = crop_x2 - crop_x1
+                        crop_h = crop_y2 - crop_y1
+                        crop_area = crop_w * crop_h
+                        
+                        vehicle_crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
+                        color_detected = extract_vehicle_color(vehicle_crop)
+                                
+                        # --- ENHANCED YOLO11 VEHICLE CLASSIFICATION ---
+                        base_cls = class_mapping[cls_id]
+                        v_type = base_cls
+                        brand_detected = base_cls
+                        
+                        if base_cls == "Car":
+                            aspect_ratio = crop_h / (crop_w + 1e-5)
+                            area_pct = crop_area / (img_area + 1e-5)
+                            
+                            if aspect_ratio > 0.78 and area_pct > 0.08:
+                                v_type = "Van"
+                                brand_detected = "Commercial Van"
+                            elif aspect_ratio > 0.68:
+                                v_type = "SUV"
+                                brand_detected = "SUV / Crossover"
+                            elif crop_w > crop_h * 1.65:
+                                v_type = "Sedan"
+                                brand_detected = "Sedan"
+                            elif crop_w < crop_h * 1.25:
+                                v_type = "Pickup"
+                                brand_detected = "Pickup Truck"
+                            else:
+                                v_type = "Hatchback"
+                                brand_detected = "Hatchback / Compact"
+                        elif base_cls == "Truck":
+                            if crop_area > img_area * 0.12:
+                                v_type = "Truck"
+                                brand_detected = "Heavy Freight Truck"
+                            else:
+                                v_type = "Pickup"
+                                brand_detected = "Pickup Truck"
+                        elif base_cls == "Bus":
+                            v_type = "Bus"
+                            brand_detected = "Coach Bus"
+                        elif base_cls == "Motorcycle":
+                            aspect_ratio = crop_h / (crop_w + 1e-5)
+                            if aspect_ratio < 1.1 and crop_area > img_area * 0.04:
+                                v_type = "Auto Rickshaw"
+                                brand_detected = "Auto-Rickshaw / Tuk-Tuk"
+                            else:
+                                v_type = "Motorcycle"
+                                brand_detected = "Motorbike"
+                        elif base_cls == "Bicycle":
+                            v_type = "Bicycle"
+                            brand_detected = "Bicycle"
+                            
+                        # --- LICENSE PLATE OCR ---
+                        plate_text = ""
+                        if vehicle_crop.size > 0:
+                            try:
+                                global GLOBAL_EASYOCR_READER
+                                vh, vw = vehicle_crop.shape[:2]
+                                plate_area_y1 = int(vh * 0.45)
+                                plate_region = vehicle_crop[plate_area_y1:vh, 0:vw]
+                                
+                                if plate_region.size > 0:
+                                    gray = cv2.cvtColor(plate_region, cv2.COLOR_BGR2GRAY)
+                                    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+                                    enhanced = clahe.apply(gray)
+                                    enhanced_resized = cv2.resize(enhanced, (max(vw * 2, 180), max(vh, 70)), interpolation=cv2.INTER_CUBIC)
+
+                                    if GLOBAL_EASYOCR_READER is None:
+                                        import easyocr
+                                        import torch
+                                        GLOBAL_EASYOCR_READER = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+                                    ocr_results = GLOBAL_EASYOCR_READER.readtext(enhanced_resized)
+                                    if ocr_results:
+                                        ocr_results.sort(key=lambda x: x[2], reverse=True)
+                                        for ocr_res in ocr_results:
+                                            text = ocr_res[1]
+                                            conf_score = ocr_res[2]
+                                            if conf_score > 0.28:
+                                                clean_text = "".join(c for c in text if c.isalnum()).upper()
+                                                if 4 <= len(clean_text) <= 12:
+                                                    plate_text = clean_text
+                                                    break
+                            except Exception as e:
+                                print(f"Skipping OCR trace: {e}")
+                                
+                        detections.append({
+                            "type": v_type,
+                            "plate": plate_text or "N/A",
+                            "confidence": int(conf * 100) if conf <= 1 else int(conf),
+                            "color": color_detected,
+                            "brand": brand_detected,
+                            "engine": "YOLO11",
+                            "box": {
+                                "ymin": ymin,
+                                "xmin": xmin,
+                                "ymax": ymax,
+                                "xmax": xmax
+                            }
+                        })
                     
-        return jsonify({"detections": detections, "model": "YOLO11", "fallbackUsed": False})
+        return jsonify({"detections": detections, "model": "YOLO11/Roboflow", "fallbackUsed": False})
     except Exception as e:
         print(f"Error in python analyze-feed endpoint: {e}")
         return jsonify({"error": str(e)}), 500

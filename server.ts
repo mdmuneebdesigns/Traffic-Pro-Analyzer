@@ -151,7 +151,7 @@ function getGemini(): GoogleGenAI {
 }
 
 async function generateContentWithRetryAndFallback(ai: GoogleGenAI, image: string, mimeType: string) {
-  const modelsToTry = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.5-pro"];
+  const modelsToTry = ["gemini-3.6-flash", "gemini-flash-latest", "gemini-3.1-pro-preview"];
   let lastError: any = null;
 
   for (const modelName of modelsToTry) {
@@ -323,76 +323,58 @@ async function startServer() {
   app.use(express.json({ limit: "20mb" }));
   app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 
-  // API Route to analyze uploaded traffic scene images
+  // API Route to analyze uploaded traffic scene images via YOLO11 / Roboflow engine
   app.post("/api/analyze-feed", async (req, res) => {
     try {
-      const { image, mimeType } = req.body;
+      const { image, mimeType, roboflowApiKey } = req.body;
       if (!image) {
         return res.status(400).json({ error: "Missing image data" });
       }
 
-      const key = process.env.GEMINI_API_KEY;
-      if (!key) {
-        console.warn("GEMINI_API_KEY not found in environment. Forwarding to local Python YOLO11 computer vision engine...");
-        try {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s timeout for YOLO11
-          
-          const response = await fetch("http://127.0.0.1:5000/api/analyze-feed", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ image, mimeType }),
-            signal: controller.signal
-          });
-          clearTimeout(timeoutId);
-          if (response.ok) {
-            const data = await response.json();
-            return res.json(data);
-          } else {
-            console.warn(`Python YOLO11 API returned error status ${response.status}.`);
-          }
-        } catch (pyErr: any) {
-          console.warn("Failed to reach Python YOLO11 engine:", pyErr.message || pyErr);
-        }
+      // First Priority: Forward to local Python YOLO11 / Roboflow computer vision engine
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout for YOLO11 neural engine
         
-        return res.json({
-          detections: [],
-          fallbackUsed: true,
-          error: "YOLO11 engine is currently starting up. Please try again in a few seconds."
+        const response = await fetch("http://127.0.0.1:5000/api/analyze-feed", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image, mimeType, roboflowApiKey }),
+          signal: controller.signal
         });
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.detections && Array.isArray(data.detections) && data.detections.length > 0) {
+            return res.json(data);
+          }
+          console.warn("Python YOLO11 returned 0 detections. Attempting Gemini AI vision fallback...");
+        } else {
+          console.warn(`Python YOLO11 API returned error status ${response.status}.`);
+        }
+      } catch (pyErr: any) {
+        console.warn("Local Python YOLO11 engine query failed/timeout:", pyErr.message || pyErr);
       }
 
-      try {
-        const ai = getGemini();
-        const detections = await generateContentWithRetryAndFallback(ai, image, mimeType);
-        return res.json({ detections, fallbackUsed: false });
-      } catch (geminiError: any) {
-        console.warn("Gemini API call failed, falling back to local Python YOLO11 engine:", geminiError.message || geminiError);
+      // Secondary Fallback if Python engine is offline: Gemini API
+      const key = process.env.GEMINI_API_KEY;
+      if (key) {
         try {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 12000);
-          
-          const response = await fetch("http://127.0.0.1:5000/api/analyze-feed", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ image, mimeType }),
-            signal: controller.signal
-          });
-          clearTimeout(timeoutId);
-          if (response.ok) {
-            const data = await response.json();
-            return res.json(data);
-          }
-        } catch (pyErr: any) {
-          console.warn("Failed to reach Python YOLO11 engine during Gemini fallback:", pyErr.message || pyErr);
+          console.warn("Using Gemini fallback for vehicle detection...");
+          const ai = getGemini();
+          const detections = await generateContentWithRetryAndFallback(ai, image, mimeType);
+          return res.json({ detections, fallbackUsed: true, engine: "Gemini-Fallback" });
+        } catch (geminiError: any) {
+          console.warn("Gemini API fallback also failed:", geminiError.message || geminiError);
         }
-        
-        return res.json({
-          detections: [],
-          fallbackUsed: true,
-          error: "Detections failed. Python YOLO11 engine is initializing."
-        });
       }
+
+      return res.json({
+        detections: [],
+        fallbackUsed: true,
+        error: "YOLO11 engine is currently initializing. Please try again in a few seconds."
+      });
 
     } catch (error: any) {
       console.error("Error analyzing image:", error);

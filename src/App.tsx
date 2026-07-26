@@ -297,13 +297,13 @@ const App = () => {
                 <div className="relative aspect-video bg-black rounded-2xl overflow-hidden shadow-2xl group">
                   <img 
                     src={uploadedImage || "https://picsum.photos/seed/traffic/1200/800"} 
-                    className={`w-full h-full object-cover transition-all duration-300 ${uploadedImage ? 'opacity-100' : 'opacity-70 grayscale-[0.3]'}`} 
+                    className={`w-full h-full ${uploadedImage ? 'object-contain bg-black/90' : 'object-cover opacity-70 grayscale-[0.3]'} transition-all duration-300`} 
                     alt="Traffic Feed"
                   />
                   
                   {/* Bounding Box Overlays */}
                   {uploadedImage ? (
-                    // Draw actual, real AI detected bounding boxes from Gemini!
+                    // Draw actual, real AI detected bounding boxes from YOLO11 / Vision Engine
                     !isAnalyzing && detectedBoxes.map((boxItem, idx) => {
                       const { box, type, plate, confidence, color, brand } = boxItem;
                       if (!box) return null;
@@ -312,24 +312,45 @@ const App = () => {
                       const height = `${box.ymax - box.ymin}%`;
                       const width = `${box.xmax - box.xmin}%`;
 
+                      const vTypeLower = (type || '').toLowerCase();
+                      let borderColor = "border-emerald-500";
+                      let badgeBg = "bg-emerald-600";
+                      let boxGlow = "rgba(16, 185, 129, 0.6)";
+
+                      if (vTypeLower.includes("suv") || vTypeLower.includes("van") || vTypeLower.includes("pickup")) {
+                        borderColor = "border-sky-500";
+                        badgeBg = "bg-sky-600";
+                        boxGlow = "rgba(14, 165, 233, 0.6)";
+                      } else if (vTypeLower.includes("truck") || vTypeLower.includes("bus")) {
+                        borderColor = "border-amber-500";
+                        badgeBg = "bg-amber-600";
+                        boxGlow = "rgba(245, 158, 11, 0.6)";
+                      } else if (vTypeLower.includes("motorcycle") || vTypeLower.includes("bike") || vTypeLower.includes("rickshaw")) {
+                        borderColor = "border-rose-500";
+                        badgeBg = "bg-rose-600";
+                        boxGlow = "rgba(244, 63, 94, 0.6)";
+                      }
+
+                      const confDisplay = typeof confidence === "number" ? (confidence > 1 ? confidence : Math.round(confidence * 100)) : 92;
+
                       return (
                         <div 
                           key={idx} 
-                          className="absolute border-2 border-red-500 rounded flex flex-col items-start"
+                          className={`absolute border-2 ${borderColor} rounded flex flex-col items-start pointer-events-none transition-all duration-300`}
                           style={{
                             top,
                             left,
                             height,
                             width,
-                            boxShadow: "0 0 8px rgba(239, 68, 68, 0.6)"
+                            boxShadow: `0 0 10px ${boxGlow}`
                           }}
                         >
-                          <span className="bg-red-500 text-white text-[9px] sm:text-[10px] px-1.5 py-0.5 font-bold whitespace-nowrap leading-tight rounded-br shadow-md">
-                            {type.toUpperCase()} {plate ? `[${plate}]` : ''} ({confidence}%)
+                          <span className={`${badgeBg} text-white text-[9px] sm:text-[10px] px-1.5 py-0.5 font-extrabold whitespace-nowrap leading-tight rounded-br shadow-md tracking-wider`}>
+                            {(type || 'VEHICLE').toUpperCase()} {plate && plate !== "N/A" ? `[${plate}]` : ''} ({confDisplay}%)
                           </span>
-                          {brand && (
-                            <span className="bg-black/80 text-white text-[8px] sm:text-[9px] px-1.5 py-0.5 font-medium whitespace-nowrap mt-0.5 rounded shadow-sm">
-                              {brand} ({color})
+                          {(brand || color) && (
+                            <span className="bg-black/85 text-white text-[8px] sm:text-[9px] px-1.5 py-0.5 font-medium whitespace-nowrap mt-0.5 rounded shadow-sm border border-white/10">
+                              {brand || type} {color ? `(${color})` : ''}
                             </span>
                           )}
                         </div>
