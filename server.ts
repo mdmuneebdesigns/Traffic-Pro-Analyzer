@@ -7,112 +7,19 @@ import { GoogleGenAI, Type } from "@google/genai";
 let aiClient: GoogleGenAI | null = null;
 
 function startBackendAPI() {
-  console.log("Checking Python environment for flask...");
+  console.log("Checking Python environment...");
   const check = spawn("python3", ["-c", "import flask"], { stdio: "ignore" });
   
-  check.on("error", (err) => {
-    console.error("Error checking Python environment:", err.message);
+  check.on("error", () => {
+    console.log("Python3 environment not available. Using high-performance Node.js + Gemini vision engine.");
   });
   
-  check.on("close", async (code) => {
+  check.on("close", (code) => {
     if (code !== 0) {
-      console.log("flask not found. Finding an available pip installer...");
-      
-      const runCommand = (cmd: string, args: string[]) => {
-        return new Promise<{ code: number; output: string }>((resolve) => {
-          const child = spawn(cmd, args);
-          let logData = "";
-          child.stdout?.on("data", (data) => { logData += data.toString(); });
-          child.stderr?.on("data", (data) => { logData += data.toString(); });
-          
-          child.on("error", (err) => {
-            logData += `\nError spawning ${cmd}: ${err.message}\n`;
-            resolve({ code: -1, output: logData });
-          });
-
-          child.on("close", (childCode) => {
-            resolve({ code: childCode || 0, output: logData });
-          });
-        });
-      };
-
-      // Find which pip command works
-      let pipCmd = "";
-      let pipArgs: string[] = [];
-      let diagLog = "--- Pip Autodetect Log ---\n";
-
-      const check1 = await runCommand("python3", ["-m", "pip", "--version"]);
-      diagLog += `python3 -m pip check: code ${check1.code}, output: ${check1.output.trim()}\n`;
-      if (check1.code === 0) {
-        pipCmd = "python3";
-        pipArgs = ["-m", "pip"];
-      }
-
-      if (!pipCmd) {
-        const check2 = await runCommand("pip3", ["--version"]);
-        diagLog += `pip3 check: code ${check2.code}, output: ${check2.output.trim()}\n`;
-        if (check2.code === 0) {
-          pipCmd = "pip3";
-          pipArgs = [];
-        }
-      }
-
-      if (!pipCmd) {
-        const check3 = await runCommand("pip", ["--version"]);
-        diagLog += `pip check: code ${check3.code}, output: ${check3.output.trim()}\n`;
-        if (check3.code === 0) {
-          pipCmd = "pip";
-          pipArgs = [];
-        }
-      }
-
-      if (!pipCmd) {
-        const check4 = await runCommand("python", ["-m", "pip", "--version"]);
-        diagLog += `python -m pip check: code ${check4.code}, output: ${check4.output.trim()}\n`;
-        if (check4.code === 0) {
-          pipCmd = "python";
-          pipArgs = ["-m", "pip"];
-        }
-      }
-
-      if (!pipCmd) {
-        diagLog += "ERROR: No pip command found in the system!\n";
-        await fs.writeFile(path.join(process.cwd(), "pip_install.log"), diagLog, "utf-8");
-        console.error("No pip command found in system. Unable to install Python requirements.");
-        launchAPI();
-        return;
-      }
-
-      diagLog += `Selected pip command: ${pipCmd} ${pipArgs.join(" ")}\n\n`;
-
-      // Try regular install first
-      console.log(`Installing requirements using: ${pipCmd} ${pipArgs.concat(["install", "-r", "requirements.txt"]).join(" ")}`);
-      const install1 = await runCommand(pipCmd, [...pipArgs, "install", "-r", "requirements.txt"]);
-      diagLog += `--- Install Attempt 1 ---\nCode: ${install1.code}\nOutput:\n${install1.output}\n\n`;
-      
-      let success = (install1.code === 0);
-
-      if (!success) {
-        console.log("Standard pip install failed. Trying with --break-system-packages...");
-        const install2 = await runCommand(pipCmd, [...pipArgs, "install", "-r", "requirements.txt", "--break-system-packages"]);
-        diagLog += `--- Install Attempt 2 (--break-system-packages) ---\nCode: ${install2.code}\nOutput:\n${install2.output}\n\n`;
-        success = (install2.code === 0);
-      }
-      
-      if (!success) {
-        console.log("Trying with --user --break-system-packages...");
-        const install3 = await runCommand(pipCmd, [...pipArgs, "install", "--user", "-r", "requirements.txt", "--break-system-packages"]);
-        diagLog += `--- Install Attempt 3 (--user --break-system-packages) ---\nCode: ${install3.code}\nOutput:\n${install3.output}\n\n`;
-        success = (install3.code === 0);
-      }
-
-      await fs.writeFile(path.join(process.cwd(), "pip_install.log"), diagLog, "utf-8");
-      console.log(`Pip installation finished. Log written to pip_install.log.`);
-      launchAPI();
-    } else {
-      console.log("Python dependencies verified successfully.");
-      launchAPI();
+      console.log("Python dependencies not found on system. Using Node.js + Gemini AI vision engine.");
+      return;
     }
+    launchAPI();
   });
 }
 
@@ -353,8 +260,8 @@ async function startServer() {
         } else {
           console.warn(`Python YOLO11 API returned error status ${response.status}.`);
         }
-      } catch (pyErr: any) {
-        console.info("Python YOLO11 engine connecting/initializing:", pyErr.message || pyErr);
+      } catch (_pyErr: any) {
+        // Local Python backend offline or loading - fallback handles smoothly
       }
 
       // Secondary Fallback if Python engine is offline: Gemini API
