@@ -279,6 +279,29 @@ async function startServer() {
     }
   };
 
+  // Utility function to persist logs to database/traffic_logs.json
+  const saveLogsToDatabaseFile = async (newLogs: any[]) => {
+    try {
+      const filePath = path.join(process.cwd(), "database", "traffic_logs.json");
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      let existingLogs: any[] = [];
+      try {
+        const content = await fs.readFile(filePath, "utf-8");
+        existingLogs = JSON.parse(content);
+      } catch {
+        existingLogs = [];
+      }
+      // Merge new logs into existing logs avoiding duplicates by id
+      const existingIds = new Set(existingLogs.map(l => String(l.id)));
+      const filteredNew = newLogs.filter(l => !existingIds.has(String(l.id)));
+      const updated = [...filteredNew, ...existingLogs].slice(0, 500); // keep top 500
+      await fs.writeFile(filePath, JSON.stringify(updated, null, 2), "utf-8");
+      return updated;
+    } catch (err) {
+      console.warn("Failed to update traffic_logs.json:", err);
+    }
+  };
+
   // API Route to analyze uploaded traffic scene images via YOLO11 / Roboflow engine
   app.post("/api/analyze-feed", async (req, res) => {
     try {
@@ -303,6 +326,23 @@ async function startServer() {
         if (response.ok) {
           const data = await response.json();
           await updateLiveStatsFile(data.detections || [], mimeType);
+          if (Array.isArray(data.detections) && data.detections.length > 0) {
+            const now = new Date();
+            const dateStr = now.toISOString().split('T')[0];
+            const timeStr = now.toLocaleTimeString();
+            const newLogItems = data.detections.map((d: any, i: number) => ({
+              id: Date.now() + i,
+              type: d.type || "Car",
+              plate: d.plate || "N/A",
+              time: timeStr,
+              date: dateStr,
+              confidence: typeof d.confidence === 'number' ? (d.confidence > 1 ? (d.confidence / 100).toFixed(2) : d.confidence.toFixed(2)) : "0.92",
+              color: d.color || "Unknown",
+              brand: d.brand || "Vehicle",
+              status: "Stored"
+            }));
+            await saveLogsToDatabaseFile(newLogItems);
+          }
           return res.json(data);
         } else {
           console.warn(`Python YOLO11 API returned error status ${response.status}.`);
@@ -394,6 +434,41 @@ async function startServer() {
     }
   });
 
+  // Dedicated API Routes for /api/logs
+  app.get("/api/logs", async (req, res) => {
+    try {
+      const filePath = path.join(process.cwd(), "database", "traffic_logs.json");
+      const content = await fs.readFile(filePath, "utf-8");
+      const logs = JSON.parse(content);
+      return res.json(logs);
+    } catch {
+      return res.json([]);
+    }
+  });
+
+  app.post("/api/logs", async (req, res) => {
+    try {
+      const { logs: newLogs } = req.body;
+      if (!Array.isArray(newLogs)) {
+        return res.status(400).json({ error: "Invalid logs array" });
+      }
+      const updated = await saveLogsToDatabaseFile(newLogs);
+      return res.json({ status: "success", count: updated?.length || 0, logs: updated });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Failed to save logs" });
+    }
+  });
+
+  app.delete("/api/logs", async (req, res) => {
+    try {
+      const filePath = path.join(process.cwd(), "database", "traffic_logs.json");
+      await fs.writeFile(filePath, JSON.stringify([], null, 2), "utf-8");
+      return res.json({ status: "cleared", message: "All history logs deleted." });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || "Failed to clear logs" });
+    }
+  });
+
   // Dedicated API Route for /api/traffic-metrics
   app.get("/api/traffic-metrics", async (req, res) => {
     try {
@@ -449,7 +524,7 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    app.get("*all", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }

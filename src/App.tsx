@@ -17,8 +17,17 @@ import {
   Upload,
   RefreshCw,
   Menu,
-  X
+  X,
+  MapPin,
+  Search,
+  Trash2,
+  Plus,
+  Download,
+  FileSpreadsheet,
+  FileJson,
+  Filter
 } from 'lucide-react';
+import { CameraMap } from './components/CameraMap';
 import { 
   BarChart, 
   Bar, 
@@ -62,8 +71,30 @@ const App = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [logs, setLogs] = useState<any[]>(() => {
     const saved = localStorage.getItem('traffic_logs');
-    return saved ? JSON.parse(saved) : [];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (e) {}
+    }
+    return MOCK_LOGS;
   });
+
+  useEffect(() => {
+    // Sync initial logs with server backend database
+    fetch("/api/logs")
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data) && data.length > 0) {
+          setLogs(prev => {
+            const existingIds = new Set(prev.map(p => String(p.id)));
+            const newServerLogs = data.filter((d: any) => !existingIds.has(String(d.id)));
+            return [...prev, ...newServerLogs];
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
   const [settings, setSettings] = useState(() => {
     const saved = localStorage.getItem('traffic_settings');
     return saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
@@ -236,7 +267,20 @@ const App = () => {
               box: d.box,
             }));
 
-            setLogs(newLogs);
+            // Prepend new detection logs to existing history without overwriting
+            setLogs(prev => {
+              const existingIds = new Set(prev.map(l => String(l.id)));
+              const filteredNew = newLogs.filter((l: any) => !existingIds.has(String(l.id)));
+              const merged = [...filteredNew, ...prev];
+
+              fetch("/api/logs", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ logs: merged })
+              }).catch(() => {});
+
+              return merged;
+            });
             setDetectedBoxes(data.detections);
 
             const count = data.detections.length;
@@ -295,12 +339,77 @@ const App = () => {
     }
   };
 
+  const handleClearHistory = async () => {
+    try {
+      await fetch("/api/logs", { method: "DELETE" }).catch(() => {});
+    } catch (e) {}
+    setLogs([]);
+    localStorage.removeItem('traffic_logs');
+    addToast("History Cleared", "All saved vehicle detection history logs removed.", "System");
+  };
+
+  const handleAddManualLog = (logItem: any) => {
+    const newEntry = {
+      id: Date.now(),
+      type: logItem.type || 'Car',
+      plate: logItem.plate || 'MANUAL-01',
+      time: new Date().toLocaleTimeString(),
+      date: new Date().toISOString().split('T')[0],
+      confidence: '1.00',
+      color: logItem.color || 'White',
+      brand: logItem.brand || 'Manual Entry',
+      status: 'Stored'
+    };
+
+    setLogs(prev => {
+      const updated = [newEntry, ...prev];
+      fetch("/api/logs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ logs: updated })
+      }).catch(() => {});
+      return updated;
+    });
+
+    addToast("Log Saved", `Manual record for plate [${newEntry.plate}] registered.`, "System");
+  };
+
+  const handleDeleteSingleLog = (id: number | string) => {
+    setLogs(prev => {
+      const updated = prev.filter(item => item.id !== id);
+      fetch("/api/logs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ logs: updated })
+      }).catch(() => {});
+      return updated;
+    });
+    addToast("Log Removed", `Record #${id.toString().slice(-6)} deleted from history.`, "System");
+  };
+
   const renderContent = () => {
     switch (activeTab) {
+      case 'map':
+        return (
+          <CameraMap 
+            liveCount={liveStats.live_count} 
+            liveAvgSpeed={liveStats.avg_speed} 
+            livePlatesDetected={liveStats.plates_detected} 
+          />
+        );
       case 'analytics':
         return <AnalyticsView stats={MOCK_STATS} />;
       case 'history':
-        return <HistoryView logs={logs} settings={settings} onAddToast={addToast} />;
+        return (
+          <HistoryView 
+            logs={logs} 
+            settings={settings} 
+            onAddToast={addToast} 
+            onClearHistory={handleClearHistory}
+            onAddManualLog={handleAddManualLog}
+            onDeleteSingleLog={handleDeleteSingleLog}
+          />
+        );
       case 'health':
         return <HealthView />;
       case 'config':
@@ -522,6 +631,13 @@ const App = () => {
                 </div>
               </div>
             </div>
+
+            {/* Camera Map Visualization on Main Dashboard */}
+            <CameraMap 
+              liveCount={liveStats.live_count} 
+              liveAvgSpeed={liveStats.avg_speed} 
+              livePlatesDetected={liveStats.plates_detected} 
+            />
           </div>
         );
     }
@@ -564,6 +680,7 @@ const App = () => {
 
               <nav className="flex flex-col gap-2 flex-grow">
                 <NavItem icon={<LayoutDashboard size={18} />} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => { setActiveTab('dashboard'); setIsMobileMenuOpen(false); }} />
+                <NavItem icon={<MapPin size={18} />} label="Camera Map" active={activeTab === 'map'} onClick={() => { setActiveTab('map'); setIsMobileMenuOpen(false); }} />
                 <NavItem icon={<BarChart3 size={18} />} label="Analytics" active={activeTab === 'analytics'} onClick={() => { setActiveTab('analytics'); setIsMobileMenuOpen(false); }} />
                 <NavItem icon={<History size={18} />} label="Logs History" active={activeTab === 'history'} onClick={() => { setActiveTab('history'); setIsMobileMenuOpen(false); }} />
                 <NavItem icon={<ShieldCheck size={18} />} label="System Health" active={activeTab === 'health'} onClick={() => { setActiveTab('health'); setIsMobileMenuOpen(false); }} />
@@ -593,6 +710,7 @@ const App = () => {
 
         <nav className="flex flex-col gap-2 flex-grow">
           <NavItem icon={<LayoutDashboard size={18} />} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
+          <NavItem icon={<MapPin size={18} />} label="Camera Map" active={activeTab === 'map'} onClick={() => setActiveTab('map')} />
           <NavItem icon={<BarChart3 size={18} />} label="Analytics" active={activeTab === 'analytics'} onClick={() => setActiveTab('analytics')} />
           <NavItem icon={<History size={18} />} label="Logs History" active={activeTab === 'history'} onClick={() => setActiveTab('history')} />
           <NavItem icon={<ShieldCheck size={18} />} label="System Health" active={activeTab === 'health'} onClick={() => setActiveTab('health')} />
@@ -779,75 +897,387 @@ const AnalyticsView = ({ stats }: any) => (
   </div>
 );
 
-const HistoryView = ({ logs, settings, onAddToast }: any) => {
+const HistoryView = ({ logs, settings, onAddToast, onClearHistory, onAddManualLog, onDeleteSingleLog }: any) => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedType, setSelectedType] = useState('All');
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [newPlate, setNewPlate] = useState('');
+  const [newType, setNewType] = useState('Car');
+  const [newColor, setNewColor] = useState('White');
+  const [newBrand, setNewBrand] = useState('Toyota');
+
+  const isAutoSave = settings?.autoSaveCaptures !== false;
+
+  const filteredLogs = logs.filter((log: any) => {
+    const matchesType = selectedType === 'All' || (log.type && log.type.toLowerCase() === selectedType.toLowerCase());
+    const query = searchTerm.toLowerCase();
+    const matchesSearch = !query || 
+      (log.plate && log.plate.toLowerCase().includes(query)) ||
+      (log.type && log.type.toLowerCase().includes(query)) ||
+      (log.brand && log.brand.toLowerCase().includes(query)) ||
+      (log.color && log.color.toLowerCase().includes(query)) ||
+      (log.id && log.id.toString().includes(query));
+    return matchesType && matchesSearch;
+  });
+
   const exportCSV = () => {
-    const headers = "ID,Vehicle,License Plate,Time,Confidence,Status\n";
-    const rows = logs.map((log: any) => `${log.id},${log.type},${log.plate},${log.time},${log.confidence},${settings?.autoSaveCaptures ? 'Stored' : 'Cached'}`).join("\n");
+    const headers = "ID,Vehicle,License Plate,Color,Brand,Time,Confidence,Status\n";
+    const rows = filteredLogs.map((log: any) => 
+      `"${log.id}","${log.type || 'Vehicle'}","${log.plate || 'N/A'}","${log.color || 'N/A'}","${log.brand || 'N/A'}","${log.time || ''}","${log.confidence || '0.95'}","${isAutoSave ? 'Stored' : 'Cached'}"`
+    ).join("\n");
     const blob = new Blob([headers + rows], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.setAttribute('href', url);
-    a.setAttribute('download', `traffic_logs_${Date.now()}.csv`);
+    a.setAttribute('download', `traffic_history_export_${Date.now()}.csv`);
     a.click();
     if (onAddToast) {
-      onAddToast("Export Successful", "Traffic logs exported successfully as CSV!", "System");
-    } else {
-      alert("Logs exported successfully as CSV!");
+      onAddToast("Export CSV", `${filteredLogs.length} records exported successfully as CSV!`, "System");
     }
   };
 
-  const isAutoSave = settings?.autoSaveCaptures !== false;
+  const exportJSON = () => {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(filteredLogs, null, 2));
+    const a = document.createElement('a');
+    a.setAttribute("href", dataStr);
+    a.setAttribute("download", `traffic_history_export_${Date.now()}.json`);
+    a.click();
+    if (onAddToast) {
+      onAddToast("Export JSON", `${filteredLogs.length} records exported successfully as JSON!`, "System");
+    }
+  };
+
+  const handleCreateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPlate.trim()) return;
+    onAddManualLog({
+      type: newType,
+      plate: newPlate.toUpperCase().trim(),
+      color: newColor,
+      brand: newBrand
+    });
+    setNewPlate('');
+    setIsAddModalOpen(false);
+  };
+
+  const uniquePlatesCount = Array.from(new Set(logs.map((l: any) => l.plate).filter((p: any) => p && p !== 'N/A'))).length;
 
   return (
-    <div className="glass-card p-0 overflow-hidden">
-      <div className="p-6 border-b border-black/5 flex items-center justify-between bg-black/[0.01]">
-        <h3 className="font-bold flex items-center gap-2"><History size={18} /> Detection Catalog</h3>
-        <button 
-          onClick={exportCSV}
-          className="text-xs font-bold uppercase tracking-widest text-[#ff4b4b] hover:text-[#ff4b4b]/80 cursor-pointer"
-        >
-          Export CSV
-        </button>
+    <div className="flex flex-col gap-6">
+      {/* Top Metrics Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="glass-card p-5 flex items-center justify-between">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-black/40">Total Saved Logs</p>
+            <p className="text-2xl font-extrabold text-black mt-1">{logs.length}</p>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-black/5 flex items-center justify-between justify-center p-2 text-black/70">
+            <History size={20} />
+          </div>
+        </div>
+
+        <div className="glass-card p-5 flex items-center justify-between">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-black/40">Unique License Plates</p>
+            <p className="text-2xl font-extrabold text-[#ff4b4b] mt-1">{uniquePlatesCount}</p>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-[#ff4b4b]/10 flex items-center justify-between justify-center p-2 text-[#ff4b4b]">
+            <Eye size={20} />
+          </div>
+        </div>
+
+        <div className="glass-card p-5 flex items-center justify-between">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-black/40">Persistence Mode</p>
+            <p className="text-sm font-bold text-green-600 mt-1 flex items-center gap-1">
+              <Database size={14} /> Server DB + Storage
+            </p>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-green-50 flex items-center justify-between justify-center p-2 text-green-600">
+            <ShieldCheck size={20} />
+          </div>
+        </div>
+
+        <div className="glass-card p-5 flex items-center justify-between">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-black/40">Export Formats</p>
+            <p className="text-xs font-bold text-black/70 mt-1">CSV, JSON, Raw DB</p>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-between justify-center p-2 text-blue-600">
+            <Download size={20} />
+          </div>
+        </div>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left">
-          <thead className="bg-black text-white text-[10px] uppercase font-bold tracking-widest">
-            <tr>
-              <th className="px-6 py-4">ID</th>
-              <th className="px-6 py-4">Vehicle</th>
-              <th className="px-6 py-4">License Plate</th>
-              <th className="px-6 py-4">Time</th>
-              <th className="px-6 py-4">Confidence</th>
-              <th className="px-6 py-4">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-black/5">
-            {logs.map((log: any) => (
-              <tr key={log.id} className="hover:bg-black/[0.02] transition-colors">
-                <td className="px-6 py-4 text-xs font-mono">{log.id.toString().slice(-6)}</td>
-                <td className="px-6 py-4">
-                  <div className="flex items-center gap-2">
-                    {log.type === 'Car' ? <Car size={14} className="text-blue-500" /> : <Truck size={14} className="text-orange-500" />}
-                    <span className="text-sm font-medium">{log.type}</span>
-                  </div>
-                </td>
-                <td className="px-6 py-4">
-                  <span className="px-2 py-1 bg-black text-white rounded text-[10px] font-bold font-mono">{log.plate}</span>
-                </td>
-                <td className="px-6 py-4 text-xs text-black/60">{log.time}</td>
-                <td className="px-6 py-4 text-xs font-mono font-bold text-green-600">{log.confidence}</td>
-                <td className="px-6 py-4">
-                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${
-                    isAutoSave ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
-                  }`}>
-                    {isAutoSave ? 'Stored' : 'Cached Only'}
-                  </span>
-                </td>
-              </tr>
+
+      {/* Main History Table Container */}
+      <div className="glass-card p-0 overflow-hidden">
+        {/* Control Header */}
+        <div className="p-5 border-b border-black/5 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 bg-black/[0.01]">
+          <div className="flex items-center gap-2">
+            <History size={18} className="text-[#ff4b4b]" />
+            <h3 className="font-bold text-base">Vehicle Detections History</h3>
+            <span className="ml-2 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-black text-white">
+              {filteredLogs.length} Records
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setIsAddModalOpen(true)}
+              className="px-3 py-2 bg-black text-white text-xs font-bold rounded-lg hover:bg-black/80 transition-colors flex items-center gap-1.5 cursor-pointer"
+            >
+              <Plus size={14} /> Add Record
+            </button>
+
+            <button
+              onClick={exportCSV}
+              className="px-3 py-2 bg-black/5 hover:bg-black/10 text-black text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+              title="Export as CSV"
+            >
+              <FileSpreadsheet size={14} className="text-green-600" /> CSV
+            </button>
+
+            <button
+              onClick={exportJSON}
+              className="px-3 py-2 bg-black/5 hover:bg-black/10 text-black text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+              title="Export as JSON"
+            >
+              <FileJson size={14} className="text-blue-600" /> JSON
+            </button>
+
+            {logs.length > 0 && (
+              <button
+                onClick={() => {
+                  if (window.confirm("Are you sure you want to clear all history records?")) {
+                    onClearHistory();
+                  }
+                }}
+                className="px-3 py-2 bg-[#ff4b4b]/10 hover:bg-[#ff4b4b]/20 text-[#ff4b4b] text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+                title="Clear all logs"
+              >
+                <Trash2 size={14} /> Clear History
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Filter and Search Bar */}
+        <div className="p-4 border-b border-black/5 bg-gray-50/50 flex flex-col sm:flex-row gap-3 items-center justify-between">
+          <div className="relative w-full sm:w-72">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-black/40" />
+            <input
+              type="text"
+              placeholder="Search plate, type, brand..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-3 py-1.5 text-xs bg-white border border-black/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#ff4b4b]/20"
+            />
+            {searchTerm && (
+              <button onClick={() => setSearchTerm('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-black/40 hover:text-black">
+                <X size={12} />
+              </button>
+            )}
+          </div>
+
+          {/* Type Filters */}
+          <div className="flex items-center gap-1 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
+            {['All', 'Car', 'Truck', 'Bus', 'Van', 'Motorcycle'].map((t) => (
+              <button
+                key={t}
+                onClick={() => setSelectedType(t)}
+                className={`px-3 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer whitespace-nowrap ${
+                  selectedType === t
+                    ? 'bg-[#ff4b4b] text-white shadow-sm'
+                    : 'bg-white text-black/60 hover:bg-black/5 border border-black/5'
+                }`}
+              >
+                {t}
+              </button>
             ))}
-          </tbody>
-        </table>
+          </div>
+        </div>
+
+        {/* Table Content */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead className="bg-black text-white text-[10px] uppercase font-bold tracking-widest">
+              <tr>
+                <th className="px-6 py-3.5">Record ID</th>
+                <th className="px-6 py-3.5">Vehicle Type</th>
+                <th className="px-6 py-3.5">License Plate (ANPR)</th>
+                <th className="px-6 py-3.5">Color & Model</th>
+                <th className="px-6 py-3.5">Timestamp</th>
+                <th className="px-6 py-3.5">Confidence</th>
+                <th className="px-6 py-3.5">Storage</th>
+                <th className="px-4 py-3.5 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-black/5 bg-white">
+              {filteredLogs.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-6 py-12 text-center text-black/40 text-xs">
+                    <div className="flex flex-col items-center gap-2">
+                      <History size={32} className="text-black/20" />
+                      <p className="font-semibold">No detection history records found.</p>
+                      <p className="text-[11px] text-black/30">Upload an image or video above to perform real-time ANPR vehicle detection.</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                filteredLogs.map((log: any) => (
+                  <tr key={log.id} className="hover:bg-black/[0.015] transition-colors group">
+                    <td className="px-6 py-4 text-xs font-mono font-medium text-black/60">
+                      #{log.id.toString().slice(-6)}
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-2">
+                        {log.type === 'Car' ? (
+                          <Car size={15} className="text-blue-500" />
+                        ) : log.type === 'Truck' ? (
+                          <Truck size={15} className="text-amber-500" />
+                        ) : (
+                          <Car size={15} className="text-purple-500" />
+                        )}
+                        <span className="text-sm font-semibold text-black">{log.type || 'Vehicle'}</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="px-2.5 py-1 bg-black text-white rounded-md text-xs font-bold font-mono tracking-wider inline-block border border-black">
+                        {log.plate || 'N/A'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-xs text-black/70 font-medium">
+                      {log.color || log.brand ? `${log.color || ''} ${log.brand || ''}` : 'Detected Scene'}
+                    </td>
+                    <td className="px-6 py-4 text-xs text-black/60 font-mono">
+                      {log.time || '12:00:00'}
+                    </td>
+                    <td className="px-6 py-4 text-xs font-mono font-bold">
+                      <span className="text-green-600 bg-green-50 px-2 py-0.5 rounded">
+                        {log.confidence ? (parseFloat(log.confidence) > 1 ? (parseFloat(log.confidence)/100).toFixed(2) : log.confidence) : '0.95'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${
+                        isAutoSave ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-gray-100 text-gray-700'
+                      }`}>
+                        {isAutoSave ? 'Stored DB' : 'Cached'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-4 text-right">
+                      {onDeleteSingleLog && (
+                        <button
+                          onClick={() => onDeleteSingleLog(log.id)}
+                          className="p-1.5 text-black/30 hover:text-[#ff4b4b] rounded-md transition-colors cursor-pointer"
+                          title="Delete entry"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
+
+      {/* Add Manual Record Modal */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-black/10">
+            <div className="flex items-center justify-between pb-4 border-b border-black/10">
+              <h3 className="font-bold text-base flex items-center gap-2">
+                <Plus size={16} className="text-[#ff4b4b]" /> Add Manual ANPR Record
+              </h3>
+              <button 
+                onClick={() => setIsAddModalOpen(false)}
+                className="p-1 text-black/40 hover:text-black rounded-lg"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateSubmit} className="flex flex-col gap-4 mt-4">
+              <div>
+                <label className="text-xs font-bold text-black/60 uppercase tracking-wider block mb-1">
+                  License Plate Number *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. ABC-1234"
+                  value={newPlate}
+                  onChange={(e) => setNewPlate(e.target.value)}
+                  className="w-full px-3 py-2 bg-gray-50 border border-black/10 rounded-lg text-sm font-mono font-bold focus:outline-none focus:ring-2 focus:ring-[#ff4b4b]/30 uppercase"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-black/60 uppercase tracking-wider block mb-1">
+                    Vehicle Type
+                  </label>
+                  <select
+                    value={newType}
+                    onChange={(e) => setNewType(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-50 border border-black/10 rounded-lg text-xs font-medium focus:outline-none"
+                  >
+                    <option value="Car">Car</option>
+                    <option value="Truck">Truck</option>
+                    <option value="Bus">Bus</option>
+                    <option value="Van">Van</option>
+                    <option value="Motorcycle">Motorcycle</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-black/60 uppercase tracking-wider block mb-1">
+                    Color
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. White"
+                    value={newColor}
+                    onChange={(e) => setNewColor(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-50 border border-black/10 rounded-lg text-xs font-medium focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-black/60 uppercase tracking-wider block mb-1">
+                  Brand / Model
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Honda Civic"
+                  value={newBrand}
+                  onChange={(e) => setNewBrand(e.target.value)}
+                  className="w-full px-3 py-2 bg-gray-50 border border-black/10 rounded-lg text-xs font-medium focus:outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 mt-4 pt-4 border-t border-black/5">
+                <button
+                  type="button"
+                  onClick={() => setIsAddModalOpen(false)}
+                  className="px-4 py-2 text-xs font-bold text-black/60 hover:text-black rounded-lg cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-xs font-bold bg-[#ff4b4b] text-white rounded-lg hover:bg-[#ff4b4b]/90 transition-colors cursor-pointer"
+                >
+                  Save Record
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

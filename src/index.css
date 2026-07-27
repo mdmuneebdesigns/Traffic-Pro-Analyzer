@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
 
 @theme {
   --color-brand: #ff4b4b;
@@ -19,3 +20,28 @@
 .glass-card {
   @apply bg-white/80 backdrop-blur-md border border-[#141414]/10 rounded-xl;
 }
+
+/* Custom Leaflet styling overrides */
+.leaflet-container {
+  font-family: inherit;
+  z-index: 1;
+  border-radius: 0.75rem;
+}
+
+.leaflet-popup-content-wrapper {
+  background: #141414 !important;
+  color: #ffffff !important;
+  border-radius: 12px !important;
+  padding: 4px !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4) !important;
+}
+
+.leaflet-popup-tip {
+  background: #141414 !important;
+}
+
+.custom-camera-pin {
+  background: transparent;
+  border: none;
+}
+

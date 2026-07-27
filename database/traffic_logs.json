@@ -1,0 +1,7 @@
+[
+  { "id": 1001, "type": "Car", "plate": "LEF 12 3503", "time": "14:24:05", "confidence": "0.98", "color": "White", "brand": "Toyota Corrola", "status": "Stored", "date": "2026-07-26" },
+  { "id": 1002, "type": "Truck", "plate": "TX-9876", "time": "14:21:12", "confidence": "0.94", "color": "Red", "brand": "Volvo FH16", "status": "Stored", "date": "2026-07-26" },
+  { "id": 1003, "type": "Car", "plate": "K-67891", "time": "14:18:33", "confidence": "0.99", "color": "Black", "brand": "Honda Civic", "status": "Stored", "date": "2026-07-26" },
+  { "id": 1004, "type": "Van", "plate": "NY-4422", "time": "14:15:01", "confidence": "0.88", "color": "Silver", "brand": "Ford Transit", "status": "Stored", "date": "2026-07-26" },
+  { "id": 1005, "type": "Bus", "plate": "BC-1234", "time": "14:02:40", "confidence": "0.96", "color": "Blue", "brand": "Mercedes Citaro", "status": "Stored", "date": "2026-07-26" }
+]
